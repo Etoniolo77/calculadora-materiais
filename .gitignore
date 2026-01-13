@@ -1,0 +1,24 @@
+# Fontes de Dados (PDF e Excel)
+*.xlsx
+*.xlsm
+*.pdf
+*.zip
+/Biblioteca_Kits/
+/Regras_Kits/
+
+# Cache e Arquivos Temporários
+__pycache__/
+*.pkl
+database_cache.pkl
+*.log
+*.csv
+.DS_Store
+
+# Documentos Gerados
+Relatorio_Final_Sample.pdf
+Lista_Material_Calculada.csv
+
+# Ambiente Virtual
+.venv/
+venv/
+env/
