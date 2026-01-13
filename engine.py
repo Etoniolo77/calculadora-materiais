@@ -143,14 +143,22 @@ class MaterialEngine:
         p_type = str(pole_type).replace('x', '/').replace(' ', '').upper() # Normaliza C12x1000 -> C12/1000
         
         # 1. Adicionar o próprio POSTE
-        p_code, p_desc = self.get_pole_sap(p_type)
-        if p_code:
-            mats.append({'Origem': 'Poste', 'Código SAP': p_code, 'Descrição': p_desc, 'Quantidade': 1})
+        if "(E)" in str(pole_type):
+            pass # Ignorar poste existente
         else:
-            mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_type}', 'Quantidade': 1})
+            is_ret = "(R)" in str(pole_type)
+            p_clean = str(pole_type).replace("(R)", "").strip()
+            suffix = " (RETIRADA)" if is_ret else ""
+            
+            p_code, p_desc = self.get_pole_sap(p_clean)
+            if p_code:
+                mats.append({'Origem': 'Poste', 'Código SAP': p_code, 'Descrição': p_desc + suffix, 'Quantidade': 1})
+            else:
+                mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_clean}{suffix}', 'Quantidade': 1})
 
         # 2. Braçadeiras (mantém lógica existente)
         for est_raw in structures:
+            if "(E)" in str(est_raw): continue # Ignorar existentes
             is_ret = "(R)" in str(est_raw)
             est = str(est_raw).replace("(R)", "").strip()
             suffix = " (RETIRADA)" if is_ret else ""
@@ -179,6 +187,7 @@ class MaterialEngine:
         # 3. NOVO: Explodir estruturas em materiais componentes
         if self.db_loader and self.is_loaded:
             for est_raw in structures:
+                if "(E)" in str(est_raw): continue # Ignorar existentes
                 is_ret = "(R)" in str(est_raw)
                 est = str(est_raw).replace("(R)", "").strip()
                 suffix = " (RETIRADA)" if is_ret else ""
@@ -243,6 +252,7 @@ class MaterialEngine:
         
         for cabo in cables:
             desc = cabo.get('Desc', '')
+            if "(E)" in desc: continue # Ignorar cabos existentes
             qtd = cabo.get('Qtd', 0)
             tipo = cabo.get('Tipo', '')
             
@@ -519,6 +529,7 @@ class MaterialEngine:
             
             # 2. Transformador
             if data.get('Trafo') and data['Trafo'] != "None":
+                if "(E)" in str(data['Trafo']): continue # Ignorar trafo existente
                 t_val = str(data['Trafo']).upper()
                 
                 # A. Incluir o Equipamento Transformador em si

@@ -31,30 +31,41 @@ class ProjectExtractor:
         Analisa a página para identificar palavras em caixas (NOVO) ou tachadas (REMOVER).
         """
         words = page.extract_words()
-        rects = page.rects  # Caixas (contêineres)
-        lines = page.lines  # Possíveis tachados
+        rects = page.rects  
+        lines = page.lines  
+        
+        # Tentar reconstruir retângulos a partir de linhas se rects estiver vazio
+        rect_zones = []
+        for r in rects:
+            rect_zones.append({'x0': r['x0'], 'top': r['top'], 'x1': r['x1'], 'bottom': r['bottom']})
+            
+        if not rect_zones and lines:
+            # Heurística simples: linhas horizontais e verticais próximas
+            for line in lines:
+                # Se for uma linha de borda de tabela ou caixa, costuma ter espessura ou ser longa
+                pass # Implementação complexa, manteremos foco nos rects por ora
         
         for word in words:
             word_key = (page_num, round(word['x0'], 1), round(word['top'], 1), round(word['x1'], 1), round(word['bottom'], 1))
-            state = 'EXISTING' # Padrão
+            state = 'EXISTING' 
             
             # 1. Verificar se está dentro de uma CAIXA (NOVO)
-            # Damos uma pequena margem (tol) para a caixa envolver a palavra
-            tol = 2
-            for rect in rects:
-                if (rect['x0'] - tol <= word['x0'] <= rect['x1'] + tol and 
-                    rect['top'] - tol <= word['top'] <= rect['bottom'] + tol):
+            # Aumentamos a margem de tolerância (tol)
+            tol = 3
+            for r in rect_zones:
+                if (r['x0'] - tol <= word['x0'] <= r['x1'] + tol and 
+                    r['top'] - tol <= word['top'] <= r['bottom'] + tol):
                     state = 'NEW'
                     break
             
             # 2. Se não for novo, verificar se é REMOÇÃO (strikethrough)
             if state == 'EXISTING':
-                word_mid_y = (word['top'] + word['bottom']) / 2
                 for line in lines:
-                    # Linha horizontal próxima ao meio da palavra
-                    if abs(line['top'] - line['bottom']) < 2:
-                        if word['top'] <= line['top'] <= word['bottom']:
-                            # Linha cruza a palavra horizontalmente
+                    if abs(line['top'] - line['bottom']) < 3: # Linha horizontal
+                        # Se a linha cruza o centro vertical da palavra
+                        mid_y = (word['top'] + word['bottom']) / 2
+                        if abs(line['top'] - mid_y) < 4:
+                            # E está dentro dos limites horizontais
                             if not (line['x1'] < word['x0'] or line['x0'] > word['x1']):
                                 state = 'REMOVAL'
                                 break
@@ -102,10 +113,10 @@ class ProjectExtractor:
                 current_pid = None
                 p_x, p_y = 0, 0
                 
-                # Regex para Poste: P1, P2...
-                p_regex = re.compile(r'^P\d+$')
-                # Regex para Tipo de Poste: C12x1000, DT11/300, etc.
-                t_regex = re.compile(r'^[A-Z]{1,2}\d{2}[xX/]\d{3,4}$')
+                # Regex para Poste: P1, P-1, P.1, POSTE 1
+                p_regex = re.compile(r'^(P[\.\-]?\d+|POSTE?\s*\d+)$')
+                # Regex para Tipo de Poste: C12/600, DT11/300, etc.
+                t_regex = re.compile(r'^([A-Z]{1,2}\d{2}[xX/ \-]\d{3,4})$')
                 
                 # Estruturas padrão
                 s_regex = re.compile(r'^([A-Z]{1,2}\d[A-Z0-9]*|ET\d+[A-Z]*|[1-4]S\d)$')
@@ -117,8 +128,8 @@ class ProjectExtractor:
 
                     # 1. Detectar Poste (PID)
                     if p_regex.match(text):
-                        # Pular se for na seção GPS (coordenadas muito grandes ou texto SIRGAS próximo)
-                        if word['x0'] < 100 and word['top'] > 100: # Heurística
+                        # Relaxamos a restrição: apenas ignorar cabeçalho extremo superior
+                        if word['top'] > 50: 
                             current_pid = text
                             if current_pid not in pole_map:
                                 pole_map[current_pid] = {'Pole': 'Desconhecido', 'Est': [], 'Trafo': None, 'Chave': None, 'State': state}
@@ -126,33 +137,48 @@ class ProjectExtractor:
 
                     # 2. Detectar Tipo (se houver poste ativo e texto próximo)
                     elif current_pid and t_regex.match(text):
-                        # Se estiver num raio de proximidade do PID
-                        if abs(word['top'] - p_y) < 50:
-                            # Normalizar tipo: C12/1000
-                            norm_type = text.replace('X', '/').replace('x', '/')
-                            pole_map[current_pid]['Pole'] = norm_type
+                        if abs(word['top'] - p_y) < 60:
+                            norm_type = text.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+                            # Tags: NEW(vazio), REMOVAL(R), EXISTING(E)
+                            tag = ""
+                            if state == 'REMOVAL': tag = "(R)"
+                            elif state == 'EXISTING': tag = "(E)"
+                            pole_map[current_pid]['Pole'] = f"{norm_type}{tag}"
 
                     # 3. Detectar Estrutura
                     elif current_pid and s_regex.match(text):
-                        if abs(word['top'] - p_y) < 150: # Estruturas costumam estar abaixo/lado do poste
-                            # Só adicionamos se for NOVO ou REMOÇÃO
-                            if state != 'EXISTING':
-                                # Adiciona com sufixo se for remoção
-                                final_est = text if state == 'NEW' else f"{text}(R)"
+                        dy = word['top'] - p_y
+                        if -20 < dy < 200:
+                            # Apenas incluímos se for NOVO ou REMOÇÃO
+                            if state == 'NEW':
+                                final_est = text
+                                if final_est not in pole_map[current_pid]['Est']:
+                                    pole_map[current_pid]['Est'].append(final_est)
+                            elif state == 'REMOVAL':
+                                final_est = f"{text}(R)"
                                 if final_est not in pole_map[current_pid]['Est']:
                                     pole_map[current_pid]['Est'].append(final_est)
 
-                    # 4. Hardware (Trafo, Chave)
-                    elif current_pid and "KVA" in text:
+                    # 4. Hardware (Trafo)
+                    elif current_pid and ("KVA" in text or "K.VA" in text):
                         kva_match = re.search(r'(\d+)', text)
                         if kva_match:
                             kva = kva_match.group(1)
                             tipo = "MONO" if int(kva) <= 25 else "TRI"
-                            tag = "" if state == 'NEW' else "(R)" if state == 'REMOVAL' else "EXIST"
-                            if tag != "EXIST":
-                                pole_map[current_pid]['Trafo'] = f"{tipo}-{kva}kVA{tag}"
+                            if state == 'NEW':
+                                pole_map[current_pid]['Trafo'] = f"{tipo}-{kva}kVA"
+                            elif state == 'REMOVAL':
+                                pole_map[current_pid]['Trafo'] = f"{tipo}-{kva}kVA(R)"
 
-        return pole_map
+        # Filtro Absoluto: Manter APENAS os postes detectados como NOVOS (dentro de caixa)
+        cleaned_map = {}
+        for p_id, data in pole_map.items():
+            if data.get('State') == 'NEW':
+                # Limpar tags residuais se houver
+                data['Pole'] = data['Pole'].replace("(E)", "").replace("(R)", "").strip()
+                cleaned_map[p_id] = data
+                
+        return cleaned_map
 
     def find_cables(self):
         """Extrai cabos e suas metragens, respeitando o estado visual."""
@@ -193,8 +219,9 @@ class ProjectExtractor:
                                         
                                         if state == 'REMOVAL':
                                             desc += " (RETIRADA)"
-                                        
-                                        cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
+                                            cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
+                                        elif state == 'NEW':
+                                            cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
                                     break
         return cables_found
 
