@@ -7,70 +7,96 @@ from engine import MaterialEngine
 
 st.set_page_config(page_title="Calculadora de Materiais", layout="wide", initial_sidebar_state="expanded")
 
-# CSS para tornar a UI mais compacta
 st.markdown("""
 <style>
-    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
-    .element-container {margin-bottom: 0.5rem;}
-    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
-    .small-font {font-size: 0.85rem;}
-    h1 {font-size: 1.8rem; margin-bottom: 0px;}
-    h3 {font-size: 1.2rem; margin-top: 10px; margin-bottom: 5px; color: #1f77b4;}
-    .stButton button {width: 100%;}
-    hr {margin-top: 10px; margin-bottom: 10px;}
+    /* Estilo Geral Premium */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
-    /* Reduce Sidebar Top Padding */
-    section[data-testid="stSidebar"] div.block-container {
-        padding-top: 1rem;
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif !important;
     }
     
-    /* Tradução File Uploader (Hack CSS) */
-    [data-testid='stFileUploader'] {
-        width: 100%;
+    .block-container {padding-top: 2rem; padding-bottom: 2rem; max-width: 95%;}
+    
+    /* Fontes Menores e Cores Suaves */
+    p, span { font-size: 0.8rem !important; color: #666; }
+    h1 { font-size: 1.5rem !important; font-weight: 700; color: #2C3E50; margin-bottom: 0.8rem; }
+    h3 { font-size: 1.05rem !important; font-weight: 600; color: #1F77B4; margin-top: 0.5rem; margin-bottom: 0.8rem; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    
+    /* Títulos de Widgets (Labels) Padronizados */
+    [data-testid="stWidgetLabel"] p {
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        color: #444 !important;
+        margin-bottom: -2px !important;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
     }
-    [data-testid='stFileUploader'] section > input + div {
-        display: none;
+    
+    /* Inputs Compactos */
+    .stSelectbox, .stNumberInput, .stTextInput, .stMultiSelect {
+        margin-bottom: 0.4rem !important;
     }
-    /* Texto "Drag and drop file here" */
-    [data-testid='stFileUploader'] section > div:first-child > div > div > span {
-        visibility: hidden;
+    
+    /* Expander Moderno */
+    div[data-testid="stExpander"] {
+        border: 1px solid #E9ECEF;
+        border-radius: 10px;
+        background-color: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        margin-bottom: 0.6rem;
     }
-    [data-testid='stFileUploader'] section > div:first-child > div > div > span::after {
-        content: "Arraste e solte o arquivo PDF aqui";
-        visibility: visible;
-        position: absolute;
-        left: 0;
-        right: 0;
-        text-align: center;
+    
+    div[data-testid="stExpander"] div[role="button"] p {
+        font-size: 0.85rem !important;
+        font-weight: 500;
+        color: #2C3E50;
     }
-    /* Texto "Limit 200MB per file • PDF" */
-    [data-testid='stFileUploader'] section > div:first-child > div > small {
-        visibility: hidden;
+    
+    /* Buttons */
+    .stButton button {
+        border-radius: 8px !important;
+        font-size: 0.8rem !important;
+        border: 1px solid #ddd !important;
+        background-color: white !important;
+        color: #444 !important;
+        padding: 0.25rem 0.5rem !important;
+        height: auto !important;
     }
-    [data-testid='stFileUploader'] section > div:first-child > div > small::after {
-        content: "Limite 200MB por arquivo • PDF";
-        visibility: visible;
-        position: absolute;
-        left: 0;
-        right: 0;
-        text-align: center;
+    
+    /* Botão de Adição (Primary Style) */
+    div[data-testid="column"] button[key*="add"] {
+        background-color: #1F77B4 !important;
+        color: white !important;
+        border: none !important;
     }
-    /* Botão "Browse files" */
-    [data-testid='stFileUploader'] section button {
-        color: transparent; /* Esconde texto original */
-        position: relative;
-        min-width: 160px; /* Garante tamanho para texto PT-BR */
+
+    /* Otimização de Colunas e Alinhamento */
+    [data-testid="column"] {
+        gap: 0.5rem !important;
     }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #F8F9FA;
+    }
+    
+    /* Tradução File Uploader */
     [data-testid='stFileUploader'] section button::after {
         content: "Procurar arquivos";
-        color: rgb(49, 51, 63); /* Cor do texto original */
+        color: #333;
         visibility: visible;
         position: absolute;
         left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
         white-space: nowrap;
-        font-weight: normal;
+    }
+    [data-testid='stFileUploader'] section > div:first-child > div > div > span { visibility: hidden; }
+    [data-testid='stFileUploader'] section > div:first-child > div > div > span::after {
+        content: "Arraste e solte o PDF aqui";
+        visibility: visible;
+        position: absolute; left: 0; right: 0; text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -98,22 +124,22 @@ def calculate_bom():
         engine = st.session_state.engine
         materials = []
         
-        # 1. Processar Postes (do session_state.poles_data)
-        current_poles = st.session_state.get('poles_data', {})
-        print(f"DEBUG: Processing {len(current_poles)} poles")
-        
-        if not current_poles:
-             print("DEBUG: No poles data found in session_state")
-
-        materials.extend(engine.process_form_data(current_poles))
-        print(f"DEBUG: Materials after poles: {len(materials)}")
-        
-        # 2. Processar Cabos (do editor)
+        # 1. Processar Cabos primeiro (necessário para resoluções dinâmicas como alças de bitola)
         cables_df = st.session_state.cables_data
         if not cables_df.empty:
             cables_list = cables_df.to_dict('records')
             materials.extend(engine.process_cables(cables_list))
             print(f"DEBUG: Materials after cables: {len(materials)}")
+            
+        # 2. Processar Postes
+        current_poles = st.session_state.get('poles_data', {})
+        print(f"DEBUG: Processing {len(current_poles)} poles")
+        
+        if current_poles:
+            materials.extend(engine.process_form_data(current_poles))
+            print(f"DEBUG: Materials after poles: {len(materials)}")
+        else:
+             print("DEBUG: No poles data found in session_state")
         
         # 3. Agrupar
         if materials:
@@ -169,7 +195,22 @@ with st.sidebar:
     except: idx_eq = 0
     
     p_info['Equipe'] = st.selectbox("Equipe", options=equipes_lista, index=idx_eq)
-    p_info['Programador'] = st.text_input("Programador", value=p_info.get('Programador', ''))
+    
+    # Auto-preencher Programador se estiver vazio
+    prog_value = p_info.get('Programador', '')
+    if not prog_value:
+        try:
+            # Tentar pegar usuário do Streamlit Cloud
+            if hasattr(st, 'user'):
+                prog_value = st.user.email.split('@')[0].upper()
+            elif hasattr(st, 'experimental_user'):
+                prog_value = st.experimental_user.email.split('@')[0].upper()
+            elif 'user' in st.session_state: # Fallback custom
+                prog_value = st.session_state.user
+        except:
+            pass
+            
+    p_info['Programador'] = st.text_input("Programador", value=prog_value)
     
     # Data removida da UI conforme pedido (mantida internamente para o PDF)
     if 'Data' not in p_info or p_info['Data'] is None:
@@ -220,166 +261,137 @@ if uploaded_file:
     col_editor, col_results = st.columns([1, 1])
     
     with col_editor:
-        # 1. Postes e Estruturas
-        st.markdown("### 🏗️ Postes e Estruturas")
-        
+        # Título e Botão de Adição Manual
+        header_l, header_r = st.columns([3, 1])
+        with header_l:
+            st.markdown("### 🏗️ Configuração de Postes e Ferragens")
+        with header_r:
+            if st.button("➕ Adicionar", key="add_pole_manual", help="Adicionar novo poste manualmente"):
+                new_pid = f"P{len(st.session_state.poles_data) + 1}M"
+                st.session_state.poles_data[new_pid] = {
+                    'Pole': 'C11/600',
+                    'Est': [],
+                    'Trafo': None,
+                    'Chave': None,
+                    'Estai': {'Type': 'CC - 14M', 'Qtd': 0},
+                    'ParaRaio': {'Type': 'CRUZETA', 'Qtd': 0},
+                    'Aterramento': {'Qtd': 0},
+                    'Ramal': {'Type': None, 'Qtd': 0.0}
+                }
+                st.rerun()
+
         poles = st.session_state.poles_data
         if not poles:
-            st.warning("Nenhum poste detectado.")
+            st.warning("Nenhum poste detectado. Use o botão acima para adicionar.")
         else:
-            sorted_ids = sorted(poles.keys(), key=lambda x: int(x.replace('P', '')))
+            # Ordenar IDs (P1, P2, P10...)
+            import re
+            def sort_key(s):
+                nums = re.findall(r'\d+', s)
+                return int(nums[0]) if nums else 999
+
+            sorted_ids = sorted(poles.keys(), key=sort_key)
             
             for p_id in sorted_ids:
                 p_data = poles[p_id]
                 
-                with st.expander(f"📍 **{p_id}** - {p_data.get('Pole', 'Desconhecido')}", expanded=False):
+                # Resumo para o título do expander
+                summary = f"{p_id} — {p_data.get('Pole', '---')} | {', '.join(p_data.get('Est', []))[:20]}"
+                with st.expander(f"📍 {summary}", expanded=False):
                     
-                    # Linha 1: Tipo Poste + Estruturas (Multiselect)
+                    # Linha 1: Poste e Estruturas
                     c1, c2 = st.columns([1, 2])
                     with c1:
-                        new_pole = st.selectbox(
-                            "Tipo Poste",
-                            options=[p_data['Pole'], "C12/1000", "C12/600", "C11/600", "C11/300", "DT 12/1000"],
-                            index=0,
-                            key=f"pole_type_{p_id}",
-                            label_visibility="collapsed"
-                        )
-                        poles[p_id]['Pole'] = new_pole
+                        pole_opts = ["C12/1000", "C12/600", "C12/300", "C11/600", "C11/300", "DT11/1000", "DT11/600", "DT11/300"]
+                        curr_p = p_data.get('Pole', 'C11/600')
+                        if curr_p not in pole_opts: pole_opts.insert(0, curr_p)
+                        new_p = st.selectbox("Tipo de Poste", pole_opts, index=pole_opts.index(curr_p), key=f"sel_p_{p_id}")
+                        poles[p_id]['Pole'] = new_p
                         
                     with c2:
-                        all_opts = sorted(set(p_data['Est'] + ["N1", "N2", "N3", "B1", "B2F", "B3", "U3", "U4", "1S1", "1S3", "1S4", "ET1T", "ET4A"]))
-                        new_est = st.multiselect(
-                            "Estruturas",
-                            options=all_opts,
-                            default=p_data['Est'],
-                            key=f"est_{p_id}",
-                            label_visibility="collapsed"
-                        )
-                        poles[p_id]['Est'] = new_est
+                        all_est_db = sorted(list(set(st.session_state.engine.db_loader.unified_db.get('structures', {}).keys()))) if st.session_state.engine.db_loader else []
+                        curr_ests = [e for e in p_data.get('Est', []) if e]
+                        combined_ests = sorted(list(set(all_est_db + curr_ests)))
+                        new_ests = st.multiselect("Estruturas (Kits)", options=combined_ests, default=curr_ests, key=f"ms_est_{p_id}")
+                        poles[p_id]['Est'] = new_ests
 
-                    st.markdown("<hr style='margin: 5px 0;'>", unsafe_allow_html=True)
-
-                    st.markdown("<hr style='margin: 5px 0;'>", unsafe_allow_html=True)
+                    st.markdown("<hr style='margin: 8px 0; opacity: 0.2;'>", unsafe_allow_html=True)
                     
-                    # --- CONFIG HARDWARE ---
-                    
-                    # Linha 1: Trafo, Chave, Aterramento
+                    # Linha 2: Trafo, Chave, Aterramento
                     h1, h2, h3 = st.columns(3)
-                    
                     with h1:
-                        curr_trafo = p_data.get('Trafo')
-                        trafo_opts = [None, "MONO-10kVA", "MONO-15kVA", "MONO-25kVA", "TRI-30kVA", "TRI-45kVA", "TRI-75kVA", "TRI-112.5kVA"]
+                        trafo_opts = [None, "MONO-5kVA", "MONO-10kVA", "MONO-15kVA", "MONO-25kVA", "TRI-30kVA", "TRI-45kVA", "TRI-75kVA", "TRI-112.5kVA"]
+                        curr_t = p_data.get('Trafo')
+                        if curr_t and curr_t not in trafo_opts: trafo_opts.append(curr_t)
+                        new_t = st.selectbox("Equipamento Trafo", trafo_opts, index=trafo_opts.index(curr_t) if curr_t in trafo_opts else 0, key=f"t_{p_id}")
+                        poles[p_id]['Trafo'] = new_t
                         
-                        # Se existe um valor extraído que não está na lista padrão, adicioná-lo
-                        if curr_trafo and curr_trafo not in trafo_opts:
-                            trafo_opts.append(curr_trafo)
-                            
-                        try: idx = trafo_opts.index(curr_trafo)
-                        except: idx = 0
-                        new_trafo = st.selectbox("Trafo", trafo_opts, index=idx, key=f"trafo_{p_id}")
-                        poles[p_id]['Trafo'] = new_trafo
-                    
                     with h2:
-                        curr_chave = p_data.get('Chave')
-                        chave_opts = [None, "FUSIVEL", "FACA", "RELIGADORA"]
-                        
-                        # Se existe um valor extraído que não está na lista padrão, adicioná-lo
-                        if curr_chave and curr_chave not in chave_opts:
-                            chave_opts.append(curr_chave)
- 
-                        try: idx_c = chave_opts.index(curr_chave)
-                        except: idx_c = 0
-                        new_chave = st.selectbox("Chave", chave_opts, index=idx_c, key=f"chave_{p_id}")
-                        poles[p_id]['Chave'] = new_chave
+                        chave_opts = [None, "FUSIVEL", "FACA", "RELIGADORA", "SECCIONADORA"]
+                        curr_c = p_data.get('Chave')
+                        if curr_c and curr_c not in chave_opts: chave_opts.append(curr_c)
+                        new_c = st.selectbox("Equipamento Manobra", chave_opts, index=chave_opts.index(curr_c) if curr_c in chave_opts else 0, key=f"c_{p_id}")
+                        poles[p_id]['Chave'] = new_c
                         
                     with h3:
-                        val_aterr = p_data.get('Aterramento', 0)
-                        if isinstance(val_aterr, dict):
-                            curr_aterr_qtd = int(val_aterr.get('Qtd', 0))
-                        else:
-                            curr_aterr_qtd = int(val_aterr) if val_aterr else 0
-                        
-                        new_aterr = st.number_input("Aterramento (Qtd)", min_value=0, value=curr_aterr_qtd, key=f"aterr_{p_id}")
-                        poles[p_id]['Aterramento'] = {'Qtd': new_aterr} # Padronizando como dict
+                        val_at = p_data.get('Aterramento', {})
+                        curr_at = val_at.get('Qtd', 0) if isinstance(val_at, dict) else (int(val_at) if val_at else 0)
+                        new_at = st.number_input("Hastes Aterr.", min_value=0, value=int(curr_at), key=f"at_{p_id}")
+                        poles[p_id]['Aterramento'] = {'Qtd': new_at}
 
-                    # Linha 2: Estai e Para-Raio
-                    r2c1, r2c2, r2c3, r2c4 = st.columns([2, 1, 2, 1])
-                    
-                    # Estai
-                    with r2c1:
+                    # Linha 3: Estai e Para-Raio
+                    r3c1, r3c2, r3c3, r3c4 = st.columns([1.4, 0.6, 1.4, 0.6])
+                    with r3c1:
                         estai_opts = ["CC - 14M", "CC - 28M", "DT - 14M", "DT - 28M"]
-                        val_estai = p_data.get('Estai', {})
-                        curr_estai_type = val_estai.get('Type', estai_opts[0]) if isinstance(val_estai, dict) else estai_opts[0]
-                        # Tentar recuperar índice seguro
-                        try: idx_e = estai_opts.index(curr_estai_type) 
-                        except: idx_e = 0
-                        new_estai_type = st.selectbox("Estai Tipo", estai_opts, index=idx_e, key=f"estai_t_{p_id}", label_visibility="collapsed")
+                        val_e = p_data.get('Estai', {})
+                        curr_et = val_e.get('Type', estai_opts[0]) if isinstance(val_e, dict) else estai_opts[0]
+                        new_et = st.selectbox("Tipo de Estai", estai_opts, index=estai_opts.index(curr_et) if curr_et in estai_opts else 0, key=f"et_{p_id}")
+                    with r3c2:
+                        curr_eq = val_e.get('Qtd', 0) if isinstance(val_e, dict) else 0
+                        new_eq = st.number_input("Estai (Qtd)", min_value=0, value=int(curr_eq), key=f"eq_{p_id}")
+                        poles[p_id]['Estai'] = {'Type': new_et, 'Qtd': new_eq}
                     
-                    with r2c2:
-                        curr_estai_qtd = int(val_estai.get('Qtd', 0)) if isinstance(val_estai, dict) else (int(val_estai) if val_estai else 0)
-                        new_estai_qtd = st.number_input("Qtd", min_value=0, value=curr_estai_qtd, key=f"estai_q_{p_id}", label_visibility="collapsed")
-                        poles[p_id]['Estai'] = {'Type': new_estai_type, 'Qtd': new_estai_qtd}
- 
-                    # Para-Raio
-                    with r2c3:
+                    with r3c3:
                         pr_opts = ["CRUZETA", "REDE COMPACTA", "REDE MONOFÁSICA"]
                         val_pr = p_data.get('ParaRaio', {})
-                        curr_pr_type = val_pr.get('Type', pr_opts[0]) if isinstance(val_pr, dict) else pr_opts[0]
-                        try: idx_pr = pr_opts.index(curr_pr_type)
-                        except: idx_pr = 0
-                        new_pr_type = st.selectbox("Para-Raio", pr_opts, index=idx_pr, key=f"pr_t_{p_id}", label_visibility="collapsed")
-                        
-                    with r2c4:
-                        curr_pr_qtd = int(val_pr.get('Qtd', 0)) if isinstance(val_pr, dict) else 0
-                        new_pr_qtd = st.number_input("Qtd", min_value=0, value=curr_pr_qtd, key=f"pr_q_{p_id}", label_visibility="collapsed")
-                        poles[p_id]['ParaRaio'] = {'Type': new_pr_type, 'Qtd': new_pr_qtd}
-                        
-                    # Labels auxiliares linha 2
-                    st.markdown("""<div style="margin-top: -15px; display: flex; justify-content: space-between;">
-                        <span style="width: 48%; text-align: center; color: gray; font-size: 0.8em;">Estai (Tipo | Qtd)</span>
-                        <span style="width: 48%; text-align: center; color: gray; font-size: 0.8em;">Para-Raio (Tipo | Qtd)</span>
-                    </div>""", unsafe_allow_html=True)
+                        curr_prt = val_pr.get('Type', pr_opts[0]) if isinstance(val_pr, dict) else pr_opts[0]
+                        new_prt = st.selectbox("Tipo Para-Raio", pr_opts, index=pr_opts.index(curr_prt) if curr_prt in pr_opts else 0, key=f"prt_{p_id}")
+                    with r3c4:
+                        curr_prq = val_pr.get('Qtd', 0) if isinstance(val_pr, dict) else 0
+                        new_prq = st.number_input("PR (Qtd)", min_value=0, value=int(curr_prq), key=f"prq_{p_id}")
+                        poles[p_id]['ParaRaio'] = {'Type': new_prt, 'Qtd': new_prq}
 
-                    # Linha 3: Ramal
-                    st.caption("Ramal de Ligação")
-                    r3c1, r3c2 = st.columns([3, 1])
-                    
-                    with r3c1:
-                        ramal_opts = [
-                            "CABO COL MULT AL 0,60/1KV 3X1X120 NEUTRO ISOLADO",
-                            "CABO COL MULT AL 0,60/1KV 3X1X35+3 NEUTRO ISOLADO",
-                            "CABO COL MULT AL 0,60/1KV 3X1X70+7 NEUTRO ISOLADO",
-                            "CABO MULT AL XLPE 0,60/1KV 1X1X16+16MM2 (NEUTRO AZUL)",
-                            "CABO MULT AL XLPE 0,60/1KV 2X1X16+16MM2 (NEUTRO AZUL)",
-                            "CABO MULTIPLEXADO 2 X 35 + ( 35MM² ) (NEUTRO ISOLADO)",
-                            "CABO MULTIPLEXADO 2 X 70 + ( 70MM² ) TRIPLEX",
-                            "CABO MX AL XLPE 0,6/1KV 3X1X16+16MM2 (NEUTRO ISOLADO)",
-                            "CABO MX AL XLPE 0,6/1KV 3X1X25+25MM2 (NEUTRO ISOLADO)",
-                            "CONCENTRICO 25MM"
-                        ]
-                        val_ramal = p_data.get('Ramal', {})
-                        curr_ramal_type = val_ramal.get('Type', ramal_opts[0]) if isinstance(val_ramal, dict) else ramal_opts[0]
-                        try: idx_r = ramal_opts.index(curr_ramal_type)
-                        except: idx_r = 0
-                        new_ramal_type = st.selectbox("Ramal Tipo", ramal_opts, index=idx_r, key=f"ramal_t_{p_id}", label_visibility="collapsed")
-                        
-                    with r3c2:
-                        curr_ramal_qtd = float(val_ramal.get('Qtd', 0)) if isinstance(val_ramal, dict) else 0.0
-                        new_ramal_qtd = st.number_input("Metros", min_value=0.0, value=curr_ramal_qtd, key=f"ramal_q_{p_id}", label_visibility="collapsed")
-                        poles[p_id]['Ramal'] = {'Type': new_ramal_type, 'Qtd': new_ramal_qtd}
+                    # Linha 4: Ramal e Exclusão
+                    r4c1, r4c2, r4c3 = st.columns([2.5, 1, 0.5])
+                    with r4c1:
+                        ramal_opts = [None, "CABO MULT 3X120+70", "CABO MULT 3X70+70", "CABO MULT 3X35+35", "CABO CONCENTRICO 1X16+16"]
+                        val_r = p_data.get('Ramal', {})
+                        curr_rt = val_r.get('Type') if isinstance(val_r, dict) else None
+                        if curr_rt and curr_rt not in ramal_opts: ramal_opts.append(curr_rt)
+                        new_rt = st.selectbox("Ramal de Ligação", ramal_opts, index=ramal_opts.index(curr_rt) if curr_rt in ramal_opts else 0, key=f"rt_{p_id}")
+                    with r4c2:
+                        curr_rq = val_r.get('Qtd', 0.0) if isinstance(val_r, dict) else 0.0
+                        new_rq = st.number_input("Ramal (m)", min_value=0.0, step=1.0, value=float(curr_rq), key=f"rq_{p_id}")
+                        poles[p_id]['Ramal'] = {'Type': new_rt, 'Qtd': new_rq}
+                    with r4c3:
+                        st.write("") # Spacer
+                        if st.button("🗑️", key=f"del_{p_id}", help="Excluir este poste"):
+                            del st.session_state.poles_data[p_id]
+                            st.rerun()
 
         st.divider()
-
-        # 2. Cabos (SEGUNDO)
-        st.markdown("### 🔌 Cabos e Condutores")
+        st.markdown("### 🔌 Condutores e Vãos")
+        
+        # Editor de Cabos
+        cables_df = st.session_state.cables_data
         edited_cables = st.data_editor(
-            st.session_state.cables_data,
+            cables_df,
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Tipo": st.column_config.SelectboxColumn("Tipo", options=["MT", "BT"]),
+                "Tipo": st.column_config.SelectboxColumn("Tipo", options=["MT", "BT"], width="small"),
                 "Desc": st.column_config.TextColumn("Descrição", width="large"),
-                "Qtd": st.column_config.NumberColumn("Metros", format="%.2f")
+                "Qtd": st.column_config.NumberColumn("Metros", format="%.2f", width="small")
             },
             key="cables_editor"
         )
@@ -399,7 +411,8 @@ if uploaded_file:
             df_bom = st.session_state.bom_df
             
             if not df_bom.empty:
-                st.dataframe(
+                # Tornar a lista EDITÁVEL
+                edited_bom = st.data_editor(
                     df_bom,
                     column_config={
                         "Código SAP": st.column_config.TextColumn("SAP", width="small"),
@@ -408,11 +421,30 @@ if uploaded_file:
                     },
                     use_container_width=True,
                     height=600,
-                    hide_index=True
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key="bom_editor"
                 )
                 
-                total_itens = len(df_bom)
-                total_pecas = df_bom['Quantidade'].sum()
+                # Lógica para preencher descrição automaticamente se o SAP mudar
+                # Se detectarmos uma linha nova ou SAP alterado sem descrição
+                if not edited_bom.equals(df_bom):
+                    # Verificar se há códigos SAP sem descrição
+                    needs_update = False
+                    for idx, row in edited_bom.iterrows():
+                        sap = str(row['Código SAP']).strip()
+                        desc = str(row['Descrição']).strip()
+                        if sap and (not desc or desc == "Material não localizado"):
+                            if st.session_state.engine.db_loader and sap in st.session_state.engine.db_loader.sap_codes:
+                                edited_bom.at[idx, 'Descrição'] = st.session_state.engine.db_loader.sap_codes[sap]
+                                needs_update = True
+                    
+                    st.session_state.bom_df = edited_bom
+                    if needs_update:
+                        st.rerun()
+
+                total_itens = len(st.session_state.bom_df)
+                total_pecas = st.session_state.bom_df['Quantidade'].sum()
                 st.caption(f"Total: {total_itens} itens distintos | {total_pecas:.0f} peças")
                 
                 col_csv, col_pdf = st.columns(2)

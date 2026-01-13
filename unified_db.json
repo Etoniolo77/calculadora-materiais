@@ -12149,7 +12149,7 @@
     "U4": [
       {
         "sap": "VERIFICAR-CABO",
-        "desc": "ALÇA",
+        "desc": "ALÇA PREFORMADA DE DISTRIBUIÇÃO",
         "qty": 2.0,
         "type": "ALL"
       },
@@ -12220,12 +12220,6 @@
         "type": "ALL"
       },
       {
-        "sap": "10000746",
-        "desc": "ALÇA",
-        "qty": 2.0,
-        "type": "ALL"
-      },
-      {
         "sap": "10001910",
         "desc": "ARRUELAS 3/8",
         "qty": 1.0,
@@ -12279,6 +12273,26 @@
         "sap": "30000991",
         "desc": "PINO DE TOPO ACO CARB 25/34,5 KV 439 MM",
         "qty": 1.0,
+        "type": "ALL"
+      }
+    ],
+    "1S4": [
+      {
+        "sap": "10004454",
+        "desc": "ARMACAO SECUNDARIA 1X4",
+        "qty": 1,
+        "type": "ALL"
+      },
+      {
+        "sap": "10002167",
+        "desc": "ISOLADOR ROLDANA 76X79MM",
+        "qty": 1,
+        "type": "ALL"
+      },
+      {
+        "sap": "VERIFICAR-POSTE",
+        "desc": "PARAFUSO M16 x ...",
+        "qty": 1,
         "type": "ALL"
       }
     ]

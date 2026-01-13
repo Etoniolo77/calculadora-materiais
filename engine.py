@@ -18,6 +18,18 @@ CINTA_SAP_MAP = {
     320: "30053146", 340: "30053148", 360: "30053149", 380: "30053150"
 }
 
+# Mapeamento de Bitolas para Códigos SAP de Alças MT (Alumínio Nu)
+ALCA_MT_NU_MAP = {
+    '4ANA': '30050155', '2ANA': '30050152', '1/0ANA': '30050150',
+    '2/0ANA': '30050151', '3/0ANA': '30050153', '4/0ANA': '30050154',
+    '336': '30050149'
+}
+
+# Alças para Cabos Protegidos MT
+ALCA_MT_PROT_MAP = {
+    '35': '10000994', '50': '10000995', '70': '10004273', '185': '30050159'
+}
+
 class MaterialEngine:
     def __init__(self):
         self.desc_to_sap = {} 
@@ -28,6 +40,7 @@ class MaterialEngine:
         
         # Novo: Database Loader
         self.db_loader = None
+        self.detected_cables = {'MT': None, 'BT': None} # Novo: Armazenar cabos detectados
         
         # Mapeamento de Cintas (Braçadeiras) extraído dos Padrões Técnicos (.038)
         # Formato: (Tipo Poste, Estrutura) -> [(SAP, Qtd)]
@@ -137,7 +150,11 @@ class MaterialEngine:
             mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_type}', 'Quantidade': 1})
 
         # 2. Braçadeiras (mantém lógica existente)
-        for est in structures:
+        for est_raw in structures:
+            is_ret = "(R)" in str(est_raw)
+            est = str(est_raw).replace("(R)", "").strip()
+            suffix = " (RETIRADA)" if is_ret else ""
+            
             est_cat = ''
             if est.startswith('N'): est_cat = 'N'
             elif est.startswith('B'): est_cat = 'B'
@@ -147,13 +164,10 @@ class MaterialEngine:
             lookup = (p_type, est_cat)
             if lookup in self.clamp_logic:
                 for sap, qty in self.clamp_logic[lookup]:
-                    # Proteção: verificar se df_sap existe antes de acessá-lo
-                    # Tentar obter descrição do DatabaseLoader
                     if self.db_loader and str(sap) in self.db_loader.sap_codes:
-                        desc = self.db_loader.sap_codes[str(sap)]
+                        desc = self.db_loader.sap_codes[str(sap)] + suffix
                     else:
-                        # Fallback se não encontrar
-                        desc = f"BRACADEIRA SAP {sap}"
+                        desc = f"BRACADEIRA SAP {sap}{suffix}"
                     
                     mats.append({
                         'Origem': f'Ferragem {p_type}+{est}',
@@ -164,17 +178,20 @@ class MaterialEngine:
         
         # 3. NOVO: Explodir estruturas em materiais componentes
         if self.db_loader and self.is_loaded:
-            for est in structures:
+            for est_raw in structures:
+                is_ret = "(R)" in str(est_raw)
+                est = str(est_raw).replace("(R)", "").strip()
+                suffix = " (RETIRADA)" if is_ret else ""
+
                 structure_materials = self.db_loader.explode_structure(est, pole_type_str=pole_type)
                 for mat in structure_materials:
                     code = mat['code']
-                    desc = mat['desc']
+                    desc = mat['desc'] + suffix
                     qty = mat['qty']
                     
-                    # --- LÓGICA DE CINTAS DINÂMICAS ---
                     desc_upper = desc.upper()
+                    # --- LÓGICA DE CINTAS DINÂMICAS ---
                     if ("CINTA" in desc_upper or "BRAÇADEIRA" in desc_upper) and "ALÇA" not in desc_upper:
-                        # Tentar identificar categoria
                         cat = "CINTA 1"
                         if "ESTAI" in desc_upper: cat = "ESTAI 1"
                         elif "NIVEL" in desc_upper: cat = "NIVEL 1"
@@ -182,24 +199,34 @@ class MaterialEngine:
                         elif "SECUNDARIA" in desc_upper: cat = "SECUNDARIA"
                         elif "LUMINARIA" in desc_upper: cat = "LUMINARIA"
                         
-                        # Buscar diâmetro no lookup
                         diameter = None
                         lookup_table = self.db_loader.unified_db.get('cinta_lookup', {}) if self.db_loader.unified_db else {}
-                        
-                        # Limpar pole_type para busca (ex: C12/600 -> 12/600)
-                        p_search = p_type
-                        if p_search.startswith('C') and not p_search.startswith('CINTA'):
-                            p_search = p_search[1:]
-                            
+                        p_search = p_type.replace('C', '') if p_type.startswith('C') else p_type
                         if p_search in lookup_table:
                             diameter = lookup_table[p_search].get(cat)
-                            
-                        # Se achou diâmetro, atualizar SAP e Desc
                         if diameter and diameter in CINTA_SAP_MAP:
                             code = CINTA_SAP_MAP[diameter]
-                            desc = f"CINTA POSTE AC ZC F {diameter}MM"
                             if self.db_loader and code in self.db_loader.sap_codes:
-                                desc = self.db_loader.sap_codes[code]
+                                desc = self.db_loader.sap_codes[code] + suffix
+                            else:
+                                desc = f"CINTA POSTE AC ZC F {diameter}MM{suffix}"
+                    
+                    elif "ALÇA" in desc_upper and code == "VERIFICAR-CABO":
+                        mt_c = self.detected_cables.get('MT')
+                        if mt_c:
+                            mt_c_up = mt_c.upper()
+                            resolved = False
+                            for bitola, sap in ALCA_MT_NU_MAP.items():
+                                if bitola in mt_c_up:
+                                    code = sap
+                                    desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
+                                    resolved = True; break
+                            if not resolved:
+                                for bitola, sap in ALCA_MT_PROT_MAP.items():
+                                    if bitola in mt_c_up:
+                                        code = sap
+                                        desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
+                                        resolved = True; break
 
                     mats.append({
                         'Origem': f'Estrutura {est}',
@@ -219,7 +246,9 @@ class MaterialEngine:
             qtd = cabo.get('Qtd', 0)
             tipo = cabo.get('Tipo', '')
             
-            # Tentar buscar no CALC
+            # Novo: Armazenar o primeiro cabo de cada tipo para resoluções dinâmicas (ex: Alças)
+            if tipo in self.detected_cables and not self.detected_cables[tipo]:
+                self.detected_cables[tipo] = desc
             import re
             
             termos_busca = ['CABO']
@@ -536,13 +565,15 @@ class MaterialEngine:
                     qtd_estai = 0
                 
             if qtd_estai > 0:
-                # Se tiver tipo, incluir na descrição.
-                # Futuramente mapear Tipos para Kits específicos (Ex: CC vs DT)
-                desc_extra = f" - {tipo_estai}" if tipo_estai else ""
+                is_ret = "(R)" in str(tipo_estai)
+                t_clean = str(tipo_estai).replace("(R)", "").strip()
+                suffix = " (RETIRADA)" if is_ret else ""
+                
+                desc_extra = f" - {t_clean}" if t_clean else ""
                 
                 # Itens genéricos de estai (Haste + Cordoalha)
-                results.append({'Origem': f"Estai {p_id}", 'Código SAP': '30056363', 'Descrição': f'HASTE ANCOR AC 1020 3200DAN 16MM 1,6M{desc_extra}', 'Quantidade': qtd_estai})
-                results.append({'Origem': f"Estai {p_id}", 'Código SAP': '30054507', 'Descrição': 'CORDOALHA ACO CARB 9,5MM 7F CL.B MR/SM', 'Quantidade': qtd_estai * 10}) # 10m por estai
+                results.append({'Origem': f"Estai {p_id}", 'Código SAP': '30056363', 'Descrição': f'HASTE ANCOR AC 1020 3200DAN 16MM 1,6M{desc_extra}{suffix}', 'Quantidade': qtd_estai})
+                results.append({'Origem': f"Estai {p_id}", 'Código SAP': '30054507', 'Descrição': f'CORDOALHA ACO CARB 9,5MM 7F CL.B MR/SM{suffix}', 'Quantidade': qtd_estai * 10}) # 10m por estai
             
             # 5. Aterramento
             val_aterr = data.get('Aterramento')
@@ -572,9 +603,13 @@ class MaterialEngine:
                     qtd_pr = 0
 
             if qtd_pr > 0:
+                is_ret = "(R)" in str(tipo_pr)
+                t_clean = str(tipo_pr).replace("(R)", "").strip()
+                suffix = " (RETIRADA)" if is_ret else ""
+                
                 # Código genérico ou específico se disponível
                 sap_pr = '30053319' # COBERTURA (exemplo)
-                desc_pr = f'CONJUNTO PARA-RAIO - {tipo_pr}'
+                desc_pr = f'CONJUNTO PARA-RAIO - {t_clean}{suffix}'
                 results.append({'Origem': f"Para-Raio {p_id}", 'Código SAP': sap_pr, 'Descrição': desc_pr, 'Quantidade': qtd_pr})
 
             # 7. Ramal
