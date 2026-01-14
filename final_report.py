@@ -4,6 +4,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from io import BytesIO
 from datetime import datetime
+import pandas as pd
 
 class PDFReport:
     def __init__(self, buffer):
@@ -126,25 +127,41 @@ class PDFReport:
         # Iterar sobre o dataframe
         # df tem colunas: ['Código SAP', 'Descrição', 'Quantidade']
         for i, row in enumerate(df.itertuples(), start=1):
-            sap = str(row[1])
-            desc_text = str(row[2])
-            qtd = float(row[3])
-            
-            # Formatar quantidade (se for inteiro, sem decimais)
-            if qtd.is_integer():
-                qtd_str = f"{int(qtd)}"
-            else:
-                qtd_str = f"{qtd:.2f}"
-            
-            # Criar parágrafo para descrição
-            p_desc = Paragraph(desc_text, desc_style)
-            
-            table_data.append([
-                str(i),
-                sap,
-                p_desc,
-                qtd_str
-            ])
+            try:
+                # row[1] = SAP, row[2] = Desc, row[3] = Qtd (basesado em itertuples com index=True)
+                sap = str(row[1]) if row[1] is not None else "-"
+                desc_text = str(row[2]) if row[2] is not None else "Material não localizado"
+                
+                # Tratamento seguro para Quantidade
+                raw_qtd = row[3]
+                if raw_qtd is None or (isinstance(raw_qtd, float) and pd.isna(raw_qtd)):
+                    qtd = 0.0
+                else:
+                    try:
+                        qtd = float(raw_qtd)
+                    except (ValueError, TypeError):
+                        qtd = 0.0
+                
+                # Formatar quantidade (se for inteiro, sem decimais)
+                if qtd == 0:
+                    qtd_str = "0"
+                elif qtd.is_integer():
+                    qtd_str = f"{int(qtd)}"
+                else:
+                    qtd_str = f"{qtd:.2f}"
+                
+                # Criar parágrafo para descrição
+                p_desc = Paragraph(desc_text, desc_style)
+                
+                table_data.append([
+                    str(i),
+                    sap,
+                    p_desc,
+                    qtd_str
+                ])
+            except Exception as e:
+                print(f"Erro ao processar linha {i} do BOM para PDF: {e}")
+                continue
             
         # Criar Tabela
         # Largura total A4 ~535pts. Colunas: Item(30), SAP(60), Desc(385), Qtd(60)
@@ -203,5 +220,5 @@ class PDFReport:
         )
         
         # Substituir quebras de linha por <br/>
-        obs_text = observacoes.replace('\n', '<br/>')
+        obs_text = str(observacoes or "").replace('\n', '<br/>')
         self.elements.append(Paragraph(obs_text, obs_style))
