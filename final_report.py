@@ -18,7 +18,7 @@ class PDFReport:
         self.elements = []
         self.styles = getSampleStyleSheet()
 
-    def generate(self, project_info, df_materials):
+    def generate(self, project_info, df_materials, observacoes=""):
         """Gera o PDF com os dados fornecidos"""
         
         # 1. Cabeçalho
@@ -27,7 +27,11 @@ class PDFReport:
         # 2. Tabela de Materiais
         self._create_material_table(df_materials)
         
-        # 3. Construir
+        # 3. Observações (se houver)
+        if observacoes and observacoes.strip():
+            self._create_observacoes(observacoes)
+        
+        # 4. Construir
         self.doc.build(self.elements)
 
     def _create_header(self, info):
@@ -174,3 +178,30 @@ class PDFReport:
         t.setStyle(style)
         
         self.elements.append(t)
+
+    def _create_observacoes(self, observacoes):
+        """Adiciona seção de observações ao PDF"""
+        self.elements.append(Spacer(1, 20))
+        
+        # Título da seção
+        obs_title_style = ParagraphStyle(
+            'ObsTitle',
+            parent=self.styles['Heading2'],
+            fontSize=11,
+            textColor=colors.HexColor('#1f77b4'),
+            spaceAfter=8
+        )
+        self.elements.append(Paragraph("OBSERVAÇÕES", obs_title_style))
+        
+        # Conteúdo das observações
+        obs_style = ParagraphStyle(
+            'ObsContent',
+            parent=self.styles['Normal'],
+            fontSize=9,
+            leading=12,
+            textColor=colors.black
+        )
+        
+        # Substituir quebras de linha por <br/>
+        obs_text = observacoes.replace('\n', '<br/>')
+        self.elements.append(Paragraph(obs_text, obs_style))

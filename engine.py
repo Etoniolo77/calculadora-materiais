@@ -8,7 +8,12 @@ KITS_PATH = os.path.join(BASE_DIR, 'Biblioteca_Kits', 'Biblioteca de Kits', 'Mat
 SAP_PATH = os.path.join(BASE_DIR, 'Codigos de Materiais Novos.xlsx')
 CALC_PATH = os.path.join(BASE_DIR, 'CALC rev1 - Copia.xlsx')
 
-from database_loader import DatabaseLoader
+# SQLite Database Loader (substitui JSON/Pickle)
+try:
+    from database_sqlite import SQLiteDatabaseLoader as DatabaseLoader
+except ImportError:
+    # Fallback para loader legado se SQLite não disponível
+    from database_loader import DatabaseLoader
 
 # Mapeamento de Diâmetros para Códigos SAP de Cintas
 CINTA_SAP_MAP = {
@@ -27,7 +32,12 @@ ALCA_MT_NU_MAP = {
 
 # Alças para Cabos Protegidos MT
 ALCA_MT_PROT_MAP = {
-    '35': '10000994', '50': '10000995', '70': '10004273', '185': '30050159'
+    '35': '10000994', '50': '10000995', '70': '10004273', '150': '30050157', '185': '30050159'
+}
+
+# Mapeamento Manual de Estruturas sem DB
+MANUAL_EST_MAP = {
+    'BR1579': [('30053140', 1), ('30053137', 1)], # Exemplo de composição para BR1579
 }
 
 class MaterialEngine:
@@ -220,22 +230,43 @@ class MaterialEngine:
                             else:
                                 desc = f"CINTA POSTE AC ZC F {diameter}MM{suffix}"
                     
-                    elif "ALÇA" in desc_upper and code == "VERIFICAR-CABO":
+                    elif "ALÇA" in desc_upper and (code == "VERIFICAR" or code == "VERIFICAR-CABO"):
                         mt_c = self.detected_cables.get('MT')
                         if mt_c:
                             mt_c_up = mt_c.upper()
                             resolved = False
+                            # Priorizar ANA (Alumínio Nu)
                             for bitola, sap in ALCA_MT_NU_MAP.items():
                                 if bitola in mt_c_up:
                                     code = sap
                                     desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
                                     resolved = True; break
+                            
                             if not resolved:
+                                # Tentar Protegido
                                 for bitola, sap in ALCA_MT_PROT_MAP.items():
                                     if bitola in mt_c_up:
                                         code = sap
                                         desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
                                         resolved = True; break
+                            
+                            # Se resolveu, tentar buscar descrição rica no banco técnico
+                            if resolved and code != "VERIFICAR" and self.db_loader:
+                                rich_desc = self.db_loader.get_sap_description(code)
+                                if rich_desc: desc = rich_desc + suffix
+                    
+                    # Verificação Manual para Estruturas como BR1579
+                    if code == "VERIFICAR" and est in MANUAL_EST_MAP:
+                        # Se for uma estrutura que conhecemos o mapeamento manual
+                        for m_sap, m_qty in MANUAL_EST_MAP[est]:
+                            m_desc = self.db_loader.sap_codes.get(m_sap, f"ITEM {m_sap}") if self.db_loader else m_sap
+                            mats.append({
+                                'Origem': f'Estrutura {est} (Manual)',
+                                'Código SAP': m_sap,
+                                'Descrição': m_desc + suffix,
+                                'Quantidade': m_qty * qty
+                            })
+                        continue # Pula o append do VERIFICAR original
 
                     mats.append({
                         'Origem': f'Estrutura {est}',
