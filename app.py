@@ -935,23 +935,25 @@ if uploaded_file:
                     from final_report import PDFReport
                     from io import BytesIO
                     
-                    buff = BytesIO()
-                    report = PDFReport(buff)
-                    
-                    p_data_clean = {k: str(v) if v is not None else "" for k,v in st.session_state.project_data.items()}
-                    
-                    # Pegar observações
-                    obs = st.session_state.get('observacoes', '')
-                    
-                    report.generate(p_data_clean, df_bom, obs)
-                    
-                    st.download_button(
-                        "📄 BAIXAR PDF",
-                        data=buff.getvalue(),
-                        file_name="lista_materiais.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
+                    try:
+                        p_data_clean = {k: str(v) if v is not None else "" for k,v in st.session_state.project_data.items()}
+                        obs = st.session_state.get('observacoes', '')
+                        
+                        pdf_buffer = BytesIO()
+                        pdf_gen = PDFReport(pdf_buffer)
+                        pdf_gen.generate(p_data_clean, df_bom, obs)
+                        pdf_bytes = pdf_buffer.getvalue()
+                        
+                        st.download_button(
+                            "📄 BAIXAR PDF",
+                            data=pdf_bytes,
+                            file_name="lista_materiais.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key="btn_download_pdf"
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar PDF: {e}")
             else:
                 st.info("A lista será gerada aqui automaticamente.")
 
