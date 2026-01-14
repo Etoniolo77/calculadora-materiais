@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 import os
 import tempfile
+import base64
+from io import BytesIO
 from extractor import ProjectExtractor
 from engine import MaterialEngine
+from final_report import PDFReport
 
 st.set_page_config(page_title="Calculadora de Materiais", layout="wide", initial_sidebar_state="expanded")
 
@@ -317,7 +320,7 @@ st.markdown("""
     }
     
     /* Botão de download (estilo neutro igual sidebar) */
-    .stDownloadButton > button {
+    .stDownloadButton > button, .pdf-btn {
         background: var(--panel-bg) !important;
         border: 1px solid var(--panel-border) !important;
         color: var(--text-primary) !important;
@@ -326,12 +329,19 @@ st.markdown("""
         font-weight: 600 !important;
         font-size: 14px !important;
         transition: all 0.2s ease !important;
+        text-decoration: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100% !important;
+        height: 42px !important;
     }
     
-    .stDownloadButton > button:hover {
+    .stDownloadButton > button:hover, .pdf-btn:hover {
         background: var(--divider) !important;
         border-color: var(--text-secondary) !important;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+        color: var(--text-primary) !important;
     }
     
     /* Botão de exclusão (perigo) */
@@ -901,8 +911,10 @@ if uploaded_file:
                         # A. Autofill Descrição
                         if sap and (not desc or desc == "Material não localizado"):
                             if st.session_state.engine.db_loader and sap in st.session_state.engine.db_loader.sap_codes:
-                                edited_bom.at[idx, 'Descrição'] = st.session_state.engine.db_loader.sap_codes[sap]
-                                needs_update = True
+                                new_desc = st.session_state.engine.db_loader.sap_codes[sap]
+                                if desc != new_desc:
+                                    edited_bom.at[idx, 'Descrição'] = new_desc
+                                    needs_update = True
                         
                         # B. Validação de Quantidade
                         if pd.isna(qty) or qty <= 0:
@@ -910,10 +922,11 @@ if uploaded_file:
                     
                     if error_msg:
                         st.error(error_msg)
+                    elif needs_update:
+                        st.session_state.bom_df = edited_bom
+                        st.rerun()
                     else:
                         st.session_state.bom_df = edited_bom
-                        if needs_update:
-                            st.rerun()
 
                 total_itens = len(st.session_state.bom_df)
                 total_pecas = st.session_state.bom_df['Quantidade'].sum()
@@ -922,19 +935,18 @@ if uploaded_file:
                 col_csv, col_pdf = st.columns(2)
                 
                 with col_csv:
-                    csv = df_bom.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                    # Garantir encoding utf-8-sig para Excel
+                    csv_data = df_bom.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
                     st.download_button(
-                        "⬇ BAIXAR CSV",
-                        csv,
-                        "lista_materiais_final.csv",
-                        "text/csv",
-                        use_container_width=True
+                        label="⬇ BAIXAR CSV",
+                        data=csv_data,
+                        file_name="lista_materiais_final.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="btn_csv_vfinal_stable"
                     )
                 
                 with col_pdf:
-                    from final_report import PDFReport
-                    from io import BytesIO
-                    
                     try:
                         p_data_clean = {k: str(v) if v is not None else "" for k,v in st.session_state.project_data.items()}
                         obs = st.session_state.get('observacoes', '')
@@ -944,14 +956,16 @@ if uploaded_file:
                         pdf_gen.generate(p_data_clean, df_bom, obs)
                         pdf_bytes = pdf_buffer.getvalue()
                         
+                        # Botão NATIVO para garantir o download correto
                         st.download_button(
-                            "📄 BAIXAR PDF",
+                            label="📄 BAIXAR PDF",
                             data=pdf_bytes,
                             file_name="lista_materiais.pdf",
                             mime="application/pdf",
                             use_container_width=True,
-                            key="btn_download_pdf"
+                            key="btn_pdf_vfinal_stable"
                         )
+                            
                     except Exception as e:
                         st.error(f"Erro ao gerar PDF: {e}")
             else:
