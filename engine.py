@@ -134,9 +134,22 @@ class MaterialEngine:
 
     def get_vivid_code(self, code, description):
         code = self.clean_code(code)
-        if code.startswith(('1', '3')): return code
-        if code in self.depara: return self.depara[code]
         
+        # 1. Prioridade absoluta para o DEPARA (Tradução de códigos antigos/especiais)
+        if code in self.depara: 
+            return self.depara[code]
+        
+        # 2. Se for um código SAP válido (novo), retorna
+        if code.startswith('3'): 
+            return code
+            
+        # 3. Se for código '1...' checa descrição para ver se não é algo genérico
+        if code.startswith('1'):
+            desc_up = str(description).upper()
+            if "CINTA" in desc_up or "BRAÇADEIRA" in desc_up:
+                return code # Será tratado na lógica de cintas dinâmicas
+            return code
+
         desc_clean = str(description).upper().replace('SUCATA', '').strip()
         if desc_clean in self.desc_to_sap: return self.desc_to_sap[desc_clean]
         
@@ -219,16 +232,32 @@ class MaterialEngine:
                         elif "LUMINARIA" in desc_upper: cat = "LUMINARIA"
                         
                         diameter = None
-                        lookup_table = self.db_loader.unified_db.get('cinta_lookup', {}) if self.db_loader.unified_db else {}
-                        p_search = p_type.replace('C', '') if p_type.startswith('C') else p_type
-                        if p_search in lookup_table:
-                            diameter = lookup_table[p_search].get(cat)
+                        # Tenta pegar do metadata carregado
+                        lookup_table = self.db_loader.unified_db.get('cinta_lookup', {}) if (self.db_loader and self.db_loader.unified_db) else {}
+                        
+                        p_normalized = p_type.replace('DT', '').replace('RT', '').replace('C', '').replace('/', '-').replace(' ', '').strip()
+                        # Tenta diversos formatos de chave
+                        p_keys = [p_normalized, p_normalized.replace('-', '/'), p_type]
+                        
+                        for pk in p_keys:
+                            if pk in lookup_table:
+                                diameter = lookup_table[pk].get(cat)
+                                if diameter: break
+                        
                         if diameter and diameter in CINTA_SAP_MAP:
                             code = CINTA_SAP_MAP[diameter]
                             if self.db_loader and code in self.db_loader.sap_codes:
                                 desc = self.db_loader.sap_codes[code] + suffix
                             else:
                                 desc = f"CINTA POSTE AC ZC F {diameter}MM{suffix}"
+                        elif diameter:
+                            # Se achou diâmetro mas não o SAP exato, pelo menos dá uma descrição melhor
+                            code = "VERIFICAR"
+                            desc = f"CINTA POSTE AC ZC F {diameter}MM (SAP DESCONHECIDO){suffix}"
+                        elif code == "VERIFICAR-POSTE" or code == "10004437":
+                            # Se falhou tudo mas o código era o temporário, tenta dar uma descrição mais rica se puder
+                            # Mas mantém o VERIFICAR para o usuário saber que o poste precisa de atenção
+                            desc = f"CINTA (DIAMETRO NAO ENCONTRADO PARA POSTE {p_type}){suffix}"
                     
                     elif "ALÇA" in desc_upper and (code == "VERIFICAR" or code == "VERIFICAR-CABO"):
                         mt_c = self.detected_cables.get('MT')

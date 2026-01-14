@@ -97,6 +97,15 @@ class SQLiteDatabaseLoader:
             est_count = cursor.fetchone()[0]
             
             print(f"✓ SQLite conectado: {mat_count} materiais, {est_count} estruturas")
+            
+            # Carregar unified_db.json para metadados (cinta_lookup, etc)
+            unified_path = self.base_dir / "unified_db.json"
+            if unified_path.exists():
+                import json
+                with open(unified_path, 'r', encoding='utf-8') as f:
+                    self.unified_db = json.load(f)
+                print("✓ Unified DB carregado para metadados")
+            
             self.is_loaded = True
             
         except Exception as e:
