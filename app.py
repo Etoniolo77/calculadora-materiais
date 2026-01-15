@@ -599,10 +599,13 @@ def calculate_bom():
             
         # 2. Processar Postes
         current_poles = st.session_state.get('poles_data', {})
-        print(f"DEBUG: Processing {len(current_poles)} poles")
+        # Filtrar postes válidos (que têm tipo definido)
+        valid_poles = {k: v for k, v in current_poles.items() if v.get('Pole') and v.get('Pole') != "Selecione..."}
         
-        if current_poles:
-            materials.extend(engine.process_form_data(current_poles))
+        print(f"DEBUG: Processing {len(valid_poles)} valid poles")
+        
+        if valid_poles:
+            materials.extend(engine.process_form_data(valid_poles))
             print(f"DEBUG: Materials after poles: {len(materials)}")
         else:
              print("DEBUG: No poles data found in session_state")
@@ -695,9 +698,9 @@ with st.sidebar:
 
 # --- ÁREA PRINCIPAL ---
 
-if uploaded_file:
-    # Lógica de processamento apenas se for novo arquivo
-    if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
+if uploaded_file or st.session_state.get('last_uploaded') == "MANUAL_START":
+    # Lógica de processamento apenas se for novo arquivo REAL
+    if uploaded_file and ('last_uploaded' not in st.session_state or st.session_state.last_uploaded != uploaded_file.name):
         st.session_state.last_uploaded = uploaded_file.name
         
         # Salvar e processar
@@ -742,7 +745,7 @@ if uploaded_file:
         if st.button("＋ ADICIONAR POSTE", key="add_pole_manual", help="Adicionar novo poste manualmente", use_container_width=True):
                 new_pid = f"P{len(st.session_state.poles_data) + 1}M"
                 st.session_state.poles_data[new_pid] = {
-                    'Pole': 'C11/600',
+                    'Pole': None, # Iniciar vazio
                     'Est': [],
                     'Trafo': None,
                     'Chave': None,
@@ -781,11 +784,26 @@ if uploaded_file:
                     row1_c1, row1_c2 = st.columns([1.2, 2.5])
                     
                     with row1_c1:
-                        pole_opts = ["C12/1000", "C12/600", "C12/300", "C11/600", "C11/300", "DT11/1000", "DT11/600", "DT11/300"]
-                        curr_p = p_data.get('Pole', 'C11/600')
-                        if curr_p not in pole_opts: pole_opts.insert(0, curr_p)
-                        new_p = st.selectbox("Tipo de Poste", pole_opts, index=pole_opts.index(curr_p), key=f"sel_p_{p_id}")
-                        poles[p_id]['Pole'] = new_p
+                        pole_opts = ["C12/1000", "C12/600", "C12/300", "C11/600", "C11/300", "DT11/1000", "DT11/600", "DT11/300", "FC 11/600", "FC 11/300", "FC 12/600"]
+                        curr_p = p_data.get('Pole')
+                        
+                        # Lógica para "Selecione..." ou valor atual
+                        if not curr_p:
+                            pole_opts.insert(0, "Selecione...")
+                            idx = 0
+                        elif curr_p not in pole_opts:
+                            pole_opts.insert(0, curr_p)
+                            idx = 0
+                        else:
+                            idx = pole_opts.index(curr_p)
+                            
+                        new_p_sel = st.selectbox("Tipo de Poste", pole_opts, index=idx, key=f"sel_p_{p_id}")
+                        
+                        # Salvar apenas se não for placeholder
+                        if new_p_sel == "Selecione...":
+                            poles[p_id]['Pole'] = None
+                        else:
+                            poles[p_id]['Pole'] = new_p_sel
                         
                     with row1_c2:
                         # Verificar se db_loader e unified_db existem
@@ -929,8 +947,9 @@ if uploaded_file:
                         st.session_state.bom_df = edited_bom
 
                 total_itens = len(st.session_state.bom_df)
-                total_pecas = st.session_state.bom_df['Quantidade'].sum()
-                st.caption(f"**Total:** {total_itens} itens distintos | {total_pecas:.0f} peças")
+                total_itens = len(st.session_state.bom_df)
+                # Removido total de peças conforme solicitado (unidades mistas causavam confusão)
+                st.caption(f"**Total:** {total_itens} itens distintos")
                 
                 col_csv, col_pdf = st.columns(2)
                 
@@ -972,4 +991,16 @@ if uploaded_file:
                 st.info("A lista será gerada aqui automaticamente.")
 
 else:
+    # Tela Inicial com Opções
     st.info("📤 Faça upload do PDF do projeto na barra lateral para começar.")
+    
+    st.markdown("---")
+    st.markdown("### Ou, inicie sem PDF:")
+    
+    if st.button("📝 INICIAR MANUALMENTE", use_container_width=True):
+        st.session_state.project_data = {'Ordem': '', 'Equipe': '', 'Programador': ''}
+        st.session_state.poles_data = {}
+        st.session_state.cables_data = pd.DataFrame(columns=["Tipo", "Desc", "Qtd"])
+        st.session_state.bom_df = pd.DataFrame(columns=["Código SAP", "Descrição", "Quantidade", "Unidade"])
+        st.session_state.last_uploaded = "MANUAL_START"
+        st.rerun()

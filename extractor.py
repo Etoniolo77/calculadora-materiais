@@ -134,11 +134,19 @@ class ProjectExtractor:
         return 'NEW' # Placeholder para o refatoramento abaixo
 
     def extract_project_info(self):
-        """Tenta extrair informações de cabeçalho como Código do Projeto."""
+        """Tenta extrair informações de cabeçalho prioritariamente DIAGRAMA."""
         info = {'Ordem': ''}
-        match = re.search(r'(\d{10})', self.text)
-        if match:
-            info['Ordem'] = match.group(1)
+        
+        # 1. Tentar encontrar "DIAGRAMA <números>"
+        match_diagram = re.search(r'DIAGRAMA\s*[:.-]*\s*(\d{8,14})', self.text, re.IGNORECASE)
+        if match_diagram:
+            info['Ordem'] = match_diagram.group(1)
+        else:
+            # 2. Fallback: procurar sequência de 10-12 dígitos isolada (padrão antigo)
+            match_generic = re.search(r'(?<!\d)(\d{10,12})(?!\d)', self.text)
+            if match_generic:
+                info['Ordem'] = match_generic.group(1)
+                
         return info
 
     def find_structures_per_pole(self):

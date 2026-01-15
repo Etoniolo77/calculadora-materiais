@@ -124,7 +124,7 @@ class SQLiteDatabaseLoader:
         result = cursor.fetchone()
         return result[0] if result else f"SAP {code}"
     
-    def find_material_by_description(self, search_terms, limit: int = 5) -> List[Tuple[str, str, int]]:
+    def find_material_by_description(self, search_terms, limit: int = 5, exclude_terms: List[str] = None) -> List[Tuple[str, str, int]]:
         """
         Busca materiais por termos na descrição usando FTS5.
         Retorna lista de tuplas (codigo, descricao, score).
@@ -135,24 +135,39 @@ class SQLiteDatabaseLoader:
         if isinstance(search_terms, str):
             search_terms = [search_terms]
         
-        # Construir query FTS5
-        fts_query = " OR ".join([f'"{term}"' for term in search_terms])
+        exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
+        
+        # Construir query FTS5 com prefixo (*) para simular "contains" do legado
+        fts_query = " OR ".join([f'"{term}"*' for term in search_terms])
         
         try:
+            # Aumentar limit no SQL para permitir filtragem posterior e encontrar melhores scores
+            # Como a busca é OR, termos comuns ("POSTE") retornam milhares de resultados.
+            # Precisamos buscar muitos para garantir que o Python encontre os que tem maior interseção.
+            sql_limit = 1000 
+            
             cursor = self.conn.execute(
                 """
-                SELECT codigo, descricao, 
-                       (SELECT COUNT(*) FROM materiais_fts WHERE materiais_fts MATCH ?) as score
+                SELECT codigo, descricao
                 FROM materiais_fts 
                 WHERE materiais_fts MATCH ?
                 LIMIT ?
                 """,
-                (fts_query, fts_query, limit)
+                (fts_query, sql_limit)
             )
             
             results = []
             for row in cursor.fetchall():
                 desc_upper = row[1].upper()
+                
+                # Verificar exclusões (termos)
+                if any(ex in desc_upper for ex in exclude_upper):
+                    continue
+                
+                # REGRA DE NEGÓCIO: Filtrar códigos de desativação (começando com 9)
+                if str(row[0]).startswith('9'):
+                    continue
+
                 score = sum(1 for term in search_terms if term.upper() in desc_upper)
                 results.append((row[0], row[1], score))
             
@@ -161,15 +176,26 @@ class SQLiteDatabaseLoader:
             
         except Exception as e:
             print(f"Erro na busca FTS: {e}")
-            return self._fallback_search(search_terms, limit)
+            return self._fallback_search(search_terms, limit, exclude_terms)
     
-    def _fallback_search(self, search_terms: List[str], limit: int) -> List[Tuple[str, str, int]]:
+    def _fallback_search(self, search_terms: List[str], limit: int, exclude_terms: List[str] = None) -> List[Tuple[str, str, int]]:
         """Busca fallback sem FTS."""
         cursor = self.conn.execute("SELECT codigo, descricao FROM materiais")
         results = []
         
+        exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
+        
         for row in cursor.fetchall():
             desc_upper = row[1].upper()
+            
+            # Verificar exclusões (termos)
+            if any(ex in desc_upper for ex in exclude_upper):
+                continue
+            
+            # REGRA DE NEGÓCIO: Filtrar códigos de desativação (começando com 9)
+            if str(row[0]).startswith('9'):
+                continue
+            
             score = sum(1 for term in search_terms if term.upper() in desc_upper)
             if score > 0:
                 results.append((row[0], row[1], score))
