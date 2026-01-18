@@ -109,13 +109,18 @@ class MaterialEngine:
         import re
         nums = re.findall(r'\d+', p_type)
         if len(nums) >= 2:
-            termos_busca.append(f'{nums[0]}M')
-            termos_busca.append(f'{nums[1]}DAN')
+            h = nums[0]
+            c = nums[1]
+            # Adicionar variações de altura para cobrir "12M" e "12,0M"
+            termos_busca.append(f'{h}M')
+            termos_busca.append(f'{c}DAN')
         elif len(nums) == 1:
             termos_busca.append(f'{nums[0]}M')
         
+        exclude_terms = ['CONEXAO', 'TOPO', 'BRACADEIRA', 'LUMINARIA', 'SUPORTE']
+        
         if self.db_loader:
-            results = self.db_loader.find_material_by_description(termos_busca, limit=1)
+            results = self.db_loader.find_material_by_description(termos_busca, limit=1, exclude_terms=exclude_terms)
             if results:
                 return results[0][0], results[0][1] # code, desc
                 
@@ -218,7 +223,7 @@ class MaterialEngine:
                 structure_materials = self.db_loader.explode_structure(est, pole_type_str=pole_type)
                 for mat in structure_materials:
                     code = mat['code']
-                    desc = mat['desc'] + suffix
+                    desc = str(mat['desc']) + suffix
                     qty = mat['qty']
                     
                     desc_upper = desc.upper()
@@ -297,6 +302,14 @@ class MaterialEngine:
                             })
                         continue # Pula o append do VERIFICAR original
 
+                    # Correção Específica para Parafusos M16x400 vindos como VERIFICAR-POSTE
+                    if (code == "VERIFICAR-POSTE" or "VERIFICAR" in code) and "PARAFUSO" in desc_upper and "400" in desc_upper:
+                         code = "30058241"
+                         if self.db_loader and code in self.db_loader.sap_codes:
+                             desc = self.db_loader.sap_codes[code] + suffix
+                         else:
+                             desc = f"PARAFUSO CAB QUAD 16MM 400MM AC{suffix}"
+
                     mats.append({
                         'Origem': f'Estrutura {est}',
                         'Código SAP': code,
@@ -342,7 +355,8 @@ class MaterialEngine:
                 if numeros: termos_busca.append(numeros[-1])
 
             if self.db_loader:
-                results = self.db_loader.find_material_by_description(termos_busca, limit=1)
+                exclude_terms = ['EMENDA', 'TERMINAL', 'CONECTOR', 'LUVA', 'SELA', 'PRENSA', 'AMORTECEDOR', 'GRAMPO']
+                results = self.db_loader.find_material_by_description(termos_busca, limit=1, exclude_terms=exclude_terms)
                 
                 if results:
                     code, desc_found, score = results[0]
@@ -390,15 +404,18 @@ class MaterialEngine:
             import re
             nums = re.findall(r'\d+', p_type)
             if len(nums) >= 2:
-                altura = nums[0]
-                carga = nums[1]
-                termos_busca.append(f'{altura}M')
-                termos_busca.append(f'{carga}DAN')
+                h = nums[0]
+                c = nums[1]
+                termos_busca.append(f'{h}M')
+                termos_busca.append(f'{h},0M') # Adiciona variação 12,0M
+                termos_busca.append(f'{c}DAN')
             elif len(nums) == 1:
                 termos_busca.append(f'{nums[0]}M')
             
+            exclude_terms = ['CONEXAO', 'TOPO', 'BRACADEIRA', 'LUMINARIA', 'SUPORTE']
+            
             if self.db_loader:
-                results = self.db_loader.find_material_by_description(termos_busca, limit=1)
+                results = self.db_loader.find_material_by_description(termos_busca, limit=1, exclude_terms=exclude_terms)
                 
                 if results:
                     code, desc, score = results[0]
@@ -449,7 +466,8 @@ class MaterialEngine:
                 termos_busca.append(f'{potencia}KVA')
             
             if self.db_loader:
-                results = self.db_loader.find_material_by_description(termos_busca, limit=1)
+                exclude_terms = ['SUCATA', 'BUCHA', 'PROTECAO', 'SUPORTE', 'RELIG', 'CHAVE']
+                results = self.db_loader.find_material_by_description(termos_busca, limit=1, exclude_terms=exclude_terms)
                 
                 # Se não achou com "TRAFO", tentar "TRANSFORMADOR"
                 if not results:
@@ -543,7 +561,7 @@ class MaterialEngine:
                         if not v_code or v_code.startswith(('9', '7')) or 'CINTA' in str(row[3]).upper() or 'BRAÇADEIRA' in str(row[3]).upper(): 
                             continue # Pula cintas genéricas, vamos resolver com a lógica de poste
                         
-                        desc_final = row[3]
+                        desc_final = str(row[3])
                         if self.df_sap is not None and v_code in self.df_sap['Material Novo'].values:
                             desc_final = self.df_sap[self.df_sap['Material Novo'] == v_code]['Texto Breve Material'].iloc[0]
                             
@@ -564,7 +582,7 @@ class MaterialEngine:
                         q = qv if qv < 50 else 1.0
                     except: pass
                     results.append({
-                        'Origem': name, 'Código SAP': v_code, 'Descrição': row['MATERIAIS'], 'Quantidade': q * qtd_proj
+                        'Origem': name, 'Código SAP': v_code, 'Descrição': str(row['MATERIAIS']), 'Quantidade': q * qtd_proj
                     })
         
         if pole_mapping:

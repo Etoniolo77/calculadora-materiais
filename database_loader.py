@@ -379,20 +379,26 @@ class DatabaseLoader:
         """Retorna descrição do código SAP"""
         return self.sap_codes.get(str(code), f"SAP {code}")
     
-    def find_material_by_description(self, search_terms, limit=5):
+    def find_material_by_description(self, search_terms, limit=5, exclude_terms=None):
         """
         Busca materiais por termos na descrição.
-        search_terms: lista de termos ou string única
-        Retorna lista de tuplas (code, description, score)
+        search_terms: lista de termos
+        exclude_terms: lista de termos que NÃO podem aparecer
         """
         if isinstance(search_terms, str):
             search_terms = [search_terms]
         
-        search_terms =  [term.upper() for term in search_terms]
+        search_terms = [term.upper() for term in search_terms]
+        exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
+        
         results = []
         
         for code, desc in self.sap_codes.items():
             desc_upper = desc.upper()
+            
+            # Verificar exclusões primeiro
+            if any(ex in desc_upper for ex in exclude_upper):
+                continue
             
             # Calcular score (quantos termos foram encontrados)
             score = sum(1 for term in search_terms if term in desc_upper)
