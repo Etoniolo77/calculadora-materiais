@@ -8,7 +8,12 @@ KITS_PATH = os.path.join(BASE_DIR, 'Biblioteca_Kits', 'Biblioteca de Kits', 'Mat
 SAP_PATH = os.path.join(BASE_DIR, 'Codigos de Materiais Novos.xlsx')
 CALC_PATH = os.path.join(BASE_DIR, 'CALC rev1 - Copia.xlsx')
 
-from database_loader import DatabaseLoader
+# SQLite Database Loader (substitui JSON/Pickle)
+try:
+    from database_sqlite import SQLiteDatabaseLoader as DatabaseLoader
+except ImportError:
+    # Fallback para loader legado se SQLite não disponível
+    from database_loader import DatabaseLoader
 
 # Mapeamento de Diâmetros para Códigos SAP de Cintas
 CINTA_SAP_MAP = {
@@ -27,7 +32,12 @@ ALCA_MT_NU_MAP = {
 
 # Alças para Cabos Protegidos MT
 ALCA_MT_PROT_MAP = {
-    '35': '10000994', '50': '10000995', '70': '10004273', '185': '30050159'
+    '35': '10000994', '50': '10000995', '70': '10004273', '150': '30050157', '185': '30050159'
+}
+
+# Mapeamento Manual de Estruturas sem DB
+MANUAL_EST_MAP = {
+    'BR1579': [('30053140', 1), ('30053137', 1)], # Exemplo de composição para BR1579
 }
 
 class MaterialEngine:
@@ -124,9 +134,22 @@ class MaterialEngine:
 
     def get_vivid_code(self, code, description):
         code = self.clean_code(code)
-        if code.startswith(('1', '3')): return code
-        if code in self.depara: return self.depara[code]
         
+        # 1. Prioridade absoluta para o DEPARA (Tradução de códigos antigos/especiais)
+        if code in self.depara: 
+            return self.depara[code]
+        
+        # 2. Se for um código SAP válido (novo), retorna
+        if code.startswith('3'): 
+            return code
+            
+        # 3. Se for código '1...' checa descrição para ver se não é algo genérico
+        if code.startswith('1'):
+            desc_up = str(description).upper()
+            if "CINTA" in desc_up or "BRAÇADEIRA" in desc_up:
+                return code # Será tratado na lógica de cintas dinâmicas
+            return code
+
         desc_clean = str(description).upper().replace('SUCATA', '').strip()
         if desc_clean in self.desc_to_sap: return self.desc_to_sap[desc_clean]
         
@@ -143,14 +166,22 @@ class MaterialEngine:
         p_type = str(pole_type).replace('x', '/').replace(' ', '').upper() # Normaliza C12x1000 -> C12/1000
         
         # 1. Adicionar o próprio POSTE
-        p_code, p_desc = self.get_pole_sap(p_type)
-        if p_code:
-            mats.append({'Origem': 'Poste', 'Código SAP': p_code, 'Descrição': p_desc, 'Quantidade': 1})
+        if "(E)" in str(pole_type):
+            pass # Ignorar poste existente
         else:
-            mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_type}', 'Quantidade': 1})
+            is_ret = "(R)" in str(pole_type)
+            p_clean = str(pole_type).replace("(R)", "").strip()
+            suffix = " (RETIRADA)" if is_ret else ""
+            
+            p_code, p_desc = self.get_pole_sap(p_clean)
+            if p_code:
+                mats.append({'Origem': 'Poste', 'Código SAP': p_code, 'Descrição': p_desc + suffix, 'Quantidade': 1})
+            else:
+                mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_clean}{suffix}', 'Quantidade': 1})
 
         # 2. Braçadeiras (mantém lógica existente)
         for est_raw in structures:
+            if "(E)" in str(est_raw): continue # Ignorar existentes
             is_ret = "(R)" in str(est_raw)
             est = str(est_raw).replace("(R)", "").strip()
             suffix = " (RETIRADA)" if is_ret else ""
@@ -179,6 +210,7 @@ class MaterialEngine:
         # 3. NOVO: Explodir estruturas em materiais componentes
         if self.db_loader and self.is_loaded:
             for est_raw in structures:
+                if "(E)" in str(est_raw): continue # Ignorar existentes
                 is_ret = "(R)" in str(est_raw)
                 est = str(est_raw).replace("(R)", "").strip()
                 suffix = " (RETIRADA)" if is_ret else ""
@@ -200,33 +232,70 @@ class MaterialEngine:
                         elif "LUMINARIA" in desc_upper: cat = "LUMINARIA"
                         
                         diameter = None
-                        lookup_table = self.db_loader.unified_db.get('cinta_lookup', {}) if self.db_loader.unified_db else {}
-                        p_search = p_type.replace('C', '') if p_type.startswith('C') else p_type
-                        if p_search in lookup_table:
-                            diameter = lookup_table[p_search].get(cat)
+                        # Tenta pegar do metadata carregado
+                        lookup_table = self.db_loader.unified_db.get('cinta_lookup', {}) if (self.db_loader and self.db_loader.unified_db) else {}
+                        
+                        p_normalized = p_type.replace('DT', '').replace('RT', '').replace('C', '').replace('/', '-').replace(' ', '').strip()
+                        # Tenta diversos formatos de chave
+                        p_keys = [p_normalized, p_normalized.replace('-', '/'), p_type]
+                        
+                        for pk in p_keys:
+                            if pk in lookup_table:
+                                diameter = lookup_table[pk].get(cat)
+                                if diameter: break
+                        
                         if diameter and diameter in CINTA_SAP_MAP:
                             code = CINTA_SAP_MAP[diameter]
                             if self.db_loader and code in self.db_loader.sap_codes:
                                 desc = self.db_loader.sap_codes[code] + suffix
                             else:
                                 desc = f"CINTA POSTE AC ZC F {diameter}MM{suffix}"
+                        elif diameter:
+                            # Se achou diâmetro mas não o SAP exato, pelo menos dá uma descrição melhor
+                            code = "VERIFICAR"
+                            desc = f"CINTA POSTE AC ZC F {diameter}MM (SAP DESCONHECIDO){suffix}"
+                        elif code == "VERIFICAR-POSTE" or code == "10004437":
+                            # Se falhou tudo mas o código era o temporário, tenta dar uma descrição mais rica se puder
+                            # Mas mantém o VERIFICAR para o usuário saber que o poste precisa de atenção
+                            desc = f"CINTA (DIAMETRO NAO ENCONTRADO PARA POSTE {p_type}){suffix}"
                     
-                    elif "ALÇA" in desc_upper and code == "VERIFICAR-CABO":
+                    elif "ALÇA" in desc_upper and (code == "VERIFICAR" or code == "VERIFICAR-CABO"):
                         mt_c = self.detected_cables.get('MT')
                         if mt_c:
                             mt_c_up = mt_c.upper()
                             resolved = False
+                            # Priorizar ANA (Alumínio Nu)
                             for bitola, sap in ALCA_MT_NU_MAP.items():
                                 if bitola in mt_c_up:
                                     code = sap
                                     desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
                                     resolved = True; break
+                            
                             if not resolved:
+                                # Tentar Protegido
                                 for bitola, sap in ALCA_MT_PROT_MAP.items():
                                     if bitola in mt_c_up:
                                         code = sap
                                         desc = (self.db_loader.sap_codes[sap] if self.db_loader and sap in self.db_loader.sap_codes else f"ALÇA {bitola}") + suffix
                                         resolved = True; break
+                            
+                            # Se resolveu, tentar buscar descrição rica no banco técnico
+                            if resolved and code != "VERIFICAR" and self.db_loader:
+                                rich_desc = self.db_loader.get_sap_description(code)
+                                if rich_desc: desc = rich_desc + suffix
+                    
+                    # Verificação Manual para Estruturas como BR1579
+                    if code == "VERIFICAR" and est in MANUAL_EST_MAP:
+                        # Se for uma estrutura que conhecemos o mapeamento manual
+                        for m_sap, m_qty in MANUAL_EST_MAP[est]:
+                            m_desc = self.db_loader.sap_codes.get(m_sap, f"ITEM {m_sap}") if self.db_loader else m_sap
+                            mats.append({
+                                'Origem': f'Estrutura {est} (Manual)',
+                                'Código SAP': m_sap,
+                                'Descrição': m_desc + suffix,
+                                'Quantidade': m_qty * qty
+                            })
+                        continue # Pula o append do VERIFICAR original
 
                     mats.append({
                         'Origem': f'Estrutura {est}',
@@ -243,6 +312,7 @@ class MaterialEngine:
         
         for cabo in cables:
             desc = cabo.get('Desc', '')
+            if "(E)" in desc: continue # Ignorar cabos existentes
             qtd = cabo.get('Qtd', 0)
             tipo = cabo.get('Tipo', '')
             
@@ -519,6 +589,7 @@ class MaterialEngine:
             
             # 2. Transformador
             if data.get('Trafo') and data['Trafo'] != "None":
+                if "(E)" in str(data['Trafo']): continue # Ignorar trafo existente
                 t_val = str(data['Trafo']).upper()
                 
                 # A. Incluir o Equipamento Transformador em si
