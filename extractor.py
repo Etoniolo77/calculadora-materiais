@@ -76,49 +76,22 @@ class ProjectExtractor:
 
     def _analyze_page_visuals(self, page, page_num):
         """
-        Analisa a página para identificar palavras em caixas (NOVO) ou tachadas (REMOVER).
+        Extrai zonas de RETÂNGULOS (caixas) e LINHAS (tachados).
+        Retorna (rect_zones, lines).
         """
-        words = page.extract_words()
-        rects = page.rects  
-        lines = page.lines  
-        
-        # Tentar reconstruir retângulos a partir de linhas se rects estiver vazio
         rect_zones = []
-        for r in rects:
-            rect_zones.append({'x0': r['x0'], 'top': r['top'], 'x1': r['x1'], 'bottom': r['bottom']})
+        for r in page.rects:
+            rect_zones.append({
+                'x0': r['x0'], 'top': r['top'], 'x1': r['x1'], 'bottom': r['bottom']
+            })
             
-        if not rect_zones and lines:
-            # Heurística simples: linhas horizontais e verticais próximas
-            for line in lines:
-                # Se for uma linha de borda de tabela ou caixa, costuma ter espessura ou ser longa
-                pass # Implementação complexa, manteremos foco nos rects por ora
-        
-        for word in words:
-            word_key = (page_num, round(word['x0'], 1), round(word['top'], 1), round(word['x1'], 1), round(word['bottom'], 1))
-            state = 'EXISTING' 
+        lines = []
+        for l in page.lines:
+            lines.append({
+                'x0': l['x0'], 'top': l['top'], 'x1': l['x1'], 'bottom': l['bottom']
+            })
             
-            # 1. Verificar se está dentro de uma CAIXA (NOVO)
-            # Aumentamos a margem de tolerância (tol)
-            tol = 3
-            for r in rect_zones:
-                if (r['x0'] - tol <= word['x0'] <= r['x1'] + tol and 
-                    r['top'] - tol <= word['top'] <= r['bottom'] + tol):
-                    state = 'NEW'
-                    break
-            
-            # 2. Se não for novo, verificar se é REMOÇÃO (strikethrough)
-            if state == 'EXISTING':
-                for line in lines:
-                    if abs(line['top'] - line['bottom']) < 3: # Linha horizontal
-                        # Se a linha cruza o centro vertical da palavra
-                        mid_y = (word['top'] + word['bottom']) / 2
-                        if abs(line['top'] - mid_y) < 4:
-                            # E está dentro dos limites horizontais
-                            if not (line['x1'] < word['x0'] or line['x0'] > word['x1']):
-                                state = 'REMOVAL'
-                                break
-            
-            self.visual_states[word_key] = state
+        return rect_zones, lines
 
     def get_word_state(self, word_text, search_area_text):
         """
@@ -151,103 +124,206 @@ class ProjectExtractor:
 
     def find_structures_per_pole(self):
         """
-        Identifica postes e associa estruturas, agora filtrando por estado visual.
-        Retorna: {'P1': {'Pole': '', 'Est': ['N1', 'U3'], 'Trafo': None, ...}, ...}
+        Identifica postes e associa estruturas usando proximidade de centroide e reconstrução espacial.
         """
-        # Precisamos trabalhar com as palavras e suas coordenadas para manter o estado visual
-        pole_map = {}
+        self.last_pole_map = {}
+        pole_map = self.last_pole_map
+        self.last_labeled_items = []
+        labeled_items = self.last_labeled_items
         
         with pdfplumber.open(self.pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
-                # 0. Analisar visuais da página (RETOS e LINHAS)
-                self._analyze_page_visuals(page, i)
+                rect_zones, lines = self._analyze_page_visuals(page, i)
+                raw_words = page.extract_words()
                 
-                words = page.extract_words()
-                # Sort words by top then x0
-                words.sort(key=lambda w: (w['top'], w['x0']))
-                
-                current_pid = None
-                p_x, p_y = 0, 0
-                
-                # Regex para Poste: P1, P-1, P.1, POSTE 1
-                p_regex = re.compile(r'^(P[\.\-]?\d+|POSTE?\s*\d+)$')
-                # Regex para Tipo de Poste: C12/600, DT11/300, etc.
-                t_regex = re.compile(r'^([A-Z]{1,2}\d{2}[xX/ \-]\d{3,4})$')
-                # Estruturas padrão: N1, B2, U3, 1S3, BR1579, ET4A etc.
-                s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|ET\d+[A-Z]*|[1-4]S\d|BR\d+)$')
-
-                for j, word in enumerate(words):
-                    raw_text = word['text'].strip().upper()
-                    # Fragmentar por vírgula para lidar com "U3,1S3(1)"
-                    fragments = re.split(r'[,\s]+', raw_text) # Removi a barra / da fragmentação para não quebrar C12/600
+                # RECONSTRUÇÃO ESPACIAL: Agrupar caracteres fragmentados
+                words = []
+                if raw_words:
+                    # Pré-processar estados visuais dos fragmentos
+                    raw_words.sort(key=lambda w: (w['top'], w['x0']))
+                    current_word = raw_words[0].copy()
                     
-                    w_key = (i, round(word['x0'], 1), round(word['top'], 1), round(word['x1'], 1), round(word['bottom'], 1))
-                    state = self.visual_states.get(w_key, 'EXISTING')
+                    # Heurística de estado inicial do fragmento
+                    def get_frag_state(w):
+                        for r in rect_zones:
+                            if (r['x1'] - r['x0'] > 300 or r['bottom'] - r['top'] > 60): continue
+                            if (r['x0'] - 2.0 <= w['x0'] <= r['x1'] + 2.0 and r['top'] - 2.0 <= w['top'] <= r['bottom'] + 2.0):
+                                return 'NEW'
+                        for l in lines:
+                            if abs(l['top'] - l['bottom']) < 3 and abs(l['top'] - (w['top']+w['bottom'])/2) < 5:
+                                if not (l['x1'] < w['x0'] or l['x0'] > w['x1']): return 'REMOVAL'
+                        return 'EXISTING'
 
-                    for text in fragments:
-                        text = text.replace('(', '').replace(')', '').strip()
-                        if not text: continue
-                        
-                        # 1. Detectar Poste (PID)
-                        if p_regex.match(text):
-                            if word['top'] > 50: 
-                                current_pid = text
-                                if current_pid not in pole_map:
-                                    pole_map[current_pid] = {'Pole': 'Desconhecido', 'Est': [], 'Trafo': None, 'Chave': None, 'IsNew': (state == 'NEW')}
-                                    p_x, p_y = word['x0'], word['top']
-                                if state == 'NEW': pole_map[current_pid]['IsNew'] = True
-
-                        # 2. Detectar Tipo (Âncora alternativa se PID estiver longe)
-                        elif t_regex.match(text):
-                            found_type = text.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+                    current_word['state'] = get_frag_state(current_word)
+                    
+                    for next_w in raw_words[1:]:
+                        # Mesma região de linha e proximidade horizontal (somente se estiver à direita)
+                        # Aumentei a tolerância vertical, mas a horizontal deve ser para a direita
+                        dist_x = next_w['x0'] - current_word['x1']
+                        if abs(next_w['top'] - current_word['top']) < 10 and -2 <= dist_x < 12:
+                            # Se for vírgula decimal, não adiciona espaço
+                            is_decimal = (next_w['text'] == ',' or current_word['text'].endswith(',')) and re.match(r'\d', next_w['text'] or current_word['text'][-1:])
+                            if dist_x > 1 and not is_decimal:
+                                current_word['text'] += " "
+                            current_word['text'] += next_w['text']
+                            current_word['x1'] = next_w['x1']
+                            current_word['bottom'] = max(current_word['bottom'], next_w['bottom'])
                             
-                            # Tentar associar ao PID atual ou criar âncora por posição
-                            if current_pid and abs(word['top'] - p_y) < 100:
-                                pole_map[current_pid]['Pole'] = found_type
-                                # NOVO CRITÉRIO: Se o TIPO estiver em caixa, o POSTE FÍSICO é novo
-                                if state == 'NEW':
-                                    pole_map[current_pid]['IsNew'] = True
-                            else:
-                                anchor_id = f"REF_{int(word['top'])}"
-                                if anchor_id not in pole_map:
-                                    pole_map[anchor_id] = {'Pole': found_type, 'Est': [], 'Trafo': None, 'Chave': None, 'IsNew': (state == 'NEW')}
-                                current_pid = anchor_id
-                                p_x, p_y = word['x0'], word['top']
+                            # Herança de estado
+                            ns = get_frag_state(next_w)
+                            if ns == 'REMOVAL' or current_word['state'] == 'REMOVAL':
+                                current_word['state'] = 'REMOVAL'
+                            elif ns == 'NEW' or current_word['state'] == 'NEW':
+                                current_word['state'] = 'NEW'
+                        else:
+                            current_word['text'] = current_word['text'].replace('(CID:13)', '').replace('(CID:3)', '').strip()
+                            words.append(current_word)
+                            current_word = next_w.copy()
+                            current_word['state'] = get_frag_state(current_word)
+                    words.append(current_word)
+                
+                # Regex patterns aprimorados (case-insensitive)
+                # p_regex: Captura ID do poste em qualquer parte do texto aglutinado
+                p_regex = re.compile(r'\b(P[\.\-]?\d+|POSTE?\s*\d+)\b', re.I)
+                # t_regex: De C12x1000 até C11x300. 
+                t_regex = re.compile(r'^([A-Z]{1,2}\d{1,2}[xX/ \-]\d{3,4})', re.I)
+                # s_regex: Estruturas
+                s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ET\d+[A-Z]*|BR\d+)', re.I)
+                # trafo_regex: Captura padrões como 112,5KVA ou 3Ø 112.5kVA. 
+                # Suporta decimais com vírgula ou ponto e o prefixo 3Ø.
+                trafo_regex = re.compile(r'(?:3\s*Ø\s*)?(\d+[,.]?\d*)\s*KVA', re.I)
 
-                        # 3. Detectar Estrutura
-                        elif s_regex.match(text):
-                            if current_pid and abs(word['top'] - p_y) < 250:
-                                if state == 'NEW':
-                                    if text not in pole_map[current_pid]['Est']:
-                                        pole_map[current_pid]['Est'].append(text)
-                                elif state == 'REMOVAL':
-                                    if f"{text}(R)" not in pole_map[current_pid]['Est']:
-                                        pole_map[current_pid]['Est'].append(f"{text}(R)")
+                for word in words:
+                    # Limpar ruídos comuns
+                    text_clean = word['text'].upper().strip()
+                    raw_text = re.sub(r'(\d+)\s*([,.]?)\s*(\d+)\s*KVA', r'\1\2\3KVA', text_clean)
+                    # print(f"DEBUG: Processing Word -> '{raw_text}'")
+                    
+                    center = ((word['x0'] + word['x1'])/2, (word['top'] + word['bottom'])/2)
+                    state = word['state']
+                    
+                    # Detecção de Poste (mais tolerante)
+                    p_match = p_regex.search(raw_text)
+                    if p_match:
+                        p_id = p_match.group(1).strip().upper()
+                        if word['top'] > 50:
+                            print(f"DEBUG: Poste Detectado -> {p_id} em {center} | TEXT: '{raw_text}'")
+                            pole_map[p_id] = {
+                                'id': p_id,
+                                'pos': center,
+                                'Pole': 'Desconhecido',
+                                'Est': [],
+                                'Trafo': None,
+                                'IsNew': (state == 'NEW'),
+                                'IsNewContent': False
+                            }
+                    else:
+                        # Processar como label técnico
+                        safe_text = re.sub(r'(\d),(\d)', r'\1DOT\2', raw_text)
+                        for text in re.split(r'[,;]+', safe_text):
+                            text = text.replace('DOT', ',').strip()
+                            if not text: continue
+                            
+                            labeled_items.append({
+                                'text': text, 'pos': center, 'state': state,
+                                'type': 'TYPE' if t_regex.match(text) else (
+                                    'TRAFO' if trafo_regex.search(text) else (
+                                        'EST' if s_regex.match(text) else None
+                                    )
+                                )
+                            })
+                            if t_regex.match(text) and len(text) > 8:
+                                for sub in re.split(r'[,; ]+', text)[1:]:
+                                    if s_regex.match(sub):
+                                        labeled_items.append({'text': sub, 'pos': center, 'state': state, 'type': 'EST'})
 
-                        # 4. Hardware (Trafo)
-                        elif current_pid and ("KVA" in text or "K.VA" in text):
-                            kva_match = re.search(r'(\d+)', text)
-                            if kva_match:
-                                kva = kva_match.group(1)
-                                tipo = "MONO" if int(kva) <= 25 else "TRI"
-                                if state == 'NEW':
-                                    pole_map[current_pid]['Trafo'] = f"{tipo}-{kva}kVA"
-                                elif state == 'REMOVAL':
-                                    pole_map[current_pid]['Trafo'] = f"{tipo}-{kva}kVA(R)"
+        # Associação por Proximidade (Nearest Neighbor)
+        for item in labeled_items:
+            if not item['type'] or not pole_map: continue
+            
+            # Encontrar poste mais próximo
+            best_p = None
+            min_dist = 999999
+            
+            for p_id, p_data in pole_map.items():
+                # Distância Euclidiana entre centros
+                dx = item['pos'][0] - p_data['pos'][0]
+                dy = item['pos'][1] - p_data['pos'][1]
+                dist = math.sqrt(dx**2 + dy**2)
+                
+                # Raio de busca generoso (600px) para acomodar labels muito afastadas em projetos A0/A1
+                if dist < min_dist and dist < 600: 
+                    min_dist = dist
+                    best_p = p_id
+            
+            if best_p:
+                p_data = pole_map[best_p]
+                state = item['state']
+                text = item['text']
+                
+                # Regra Crucial: Só incluímos no mapa o que for "NEW" (instalação)
+                # No entanto, se o TIPO de poste for detectado, associamos mesmo sendo EXISTING
+                # para servir de referência, mas a lógica de limpeza no final filtrará.
+                
+                if item['type'] == 'TYPE':
+                    norm_type = text.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+                    # Prioridade: NEW > REMOVAL > EXISTING
+                    # Se já temos um tipo NEW, não sobrescrevemos com REMOVAL
+                    current_is_new = p_data.get('IsTypeNew', False)
+                    if state == 'NEW':
+                        p_data['Pole'] = norm_type
+                        p_data['IsTypeNew'] = True
+                        p_data['IsNewContent'] = True
+                    elif state == 'REMOVAL' and not current_is_new:
+                        p_data['Pole'] = f"{norm_type}(R)"
+                        # Omitimos IsNewContent = True para remoções
+                    elif not current_is_new and (p_data['Pole'] == 'Desconhecido' or '(R)' in p_data['Pole']):
+                         # Se for EXISTING e não tivermos nada melhor
+                         if '(R)' not in p_data['Pole']:
+                             p_data['Pole'] = norm_type
 
-        # Filtro Rigoroso Recalibrado
+                elif item['type'] == 'EST':
+                    est_matches = re.findall(r'([A-Z]{1,2}\d+[A-Z0-9]*)', text)
+                    for est_code in (est_matches if est_matches else [text]):
+                        norm_text = self.normalize_term(est_code)
+                        if state == 'NEW':
+                            p_data['IsNewContent'] = True
+                            if norm_text not in p_data['Est']:
+                                p_data['Est'].append(norm_text)
+                        # Ignoramos (R) e (E) da lista UI para evitar confusão do usuário
+
+                elif item['type'] == 'TRAFO':
+                    is_trifasico = "3Ø" in text or "TRI" in text or "3" in text.split("Ø")[0] if "Ø" in text else False
+                    is_bifasico = "2Ø" in text or "BI" in text or "2" in text.split("Ø")[0] if "Ø" in text else False
+                    kva_match = trafo_regex.search(text)
+                    if kva_match:
+                        kva = kva_match.group(1).replace(',', '.')
+                        prefix = "TRI" if is_trifasico else ("BI" if is_bifasico else ("MONO" if float(kva) <= 37.5 else "TRI"))
+                        desc = f"{prefix}-{kva}kVA"
+                        if state == 'NEW':
+                            p_data['Trafo'] = desc
+                            p_data['IsNewContent'] = True
+                        # Remover else para (R) -> Trafo de remoção não deve poluir o UI se o foco for instalação
+
+        # Limpeza final: Apenas postes novos ou com conteúdo novo
         cleaned_map = {}
         for p_id, data in pole_map.items():
-            if p_id == "P1": continue 
+            is_new_pole = data.get('IsNew', False)
+            is_type_new = data.get('IsTypeNew', False)
+            has_new_content = data.get('IsNewContent', False)
             
-            is_pole_new = data.get('IsNew', False)
-            has_relevant_content = len(data['Est']) > 0 or data['Trafo']
-            
-            if is_pole_new or has_relevant_content:
-                if not is_pole_new:
-                    data['Pole'] = f"{data['Pole']}(E)" 
+            if is_new_pole or has_new_content:
+                # Se o poste ou o tipo for novo, não marcamos com (E)
+                if not is_new_pole and not is_type_new:
+                    # Se chegamos aqui e Pole não é Desconhecido, ele é existente com conteúdo novo
+                    if data['Pole'] != 'Desconhecido':
+                        data['Pole'] = f"{data['Pole']}(E)"
                 
-                if 'IsNew' in data: del data['IsNew']
+                # Remover metadados internos de processamento
+                items_to_del = ['pos', 'id', 'IsNew', 'IsNewContent', 'IsTypeNew', 'state']
+                for k in items_to_del:
+                    if k in data: del data[k]
+                    
                 cleaned_map[p_id] = data
                 
         return cleaned_map
@@ -255,6 +331,9 @@ class ProjectExtractor:
     def find_cables(self):
         """Extrai cabos e suas metragens, priorizando a descrição completa."""
         cables_found = []
+        print("--- DEBUG: INICIANDO FIND_CABLES (V3) ---")
+        
+        keywords = ["MT", "BT", "CABO", "FIO", "COND", "AL", "COBRE", "MULTIPLEX", "NU"]
         
         with pdfplumber.open(self.pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
@@ -262,44 +341,66 @@ class ProjectExtractor:
                 self._analyze_page_visuals(page, i)
                 
                 words = page.extract_words()
-                # Reconstruir linhas para busca de metragem
+                # Reconstruir linhas com tolerância vertical (3px) para corrigir desalinhamentos
                 lines_data = {}
-                for w in words:
-                    y = round(w['top'], 0)
-                    if y not in lines_data: lines_data[y] = []
-                    lines_data[y].append(w)
+                # Ordenar por TOP para facilitar agrupamento
+                sorted_words_p = sorted(words, key=lambda w: w['top'])
+                
+                for w in sorted_words_p:
+                    # Tentar encontrar uma linha existente próxima
+                    placed = False
+                    for y_key in list(lines_data.keys()):
+                        if abs(w['top'] - y_key) <= 3.0: # Tolerância de 3 pontos
+                            lines_data[y_key].append(w)
+                            placed = True
+                            break
+                    if not placed:
+                        lines_data[w['top']] = [w]
                 
                 for y in sorted(lines_data.keys()):
+                    # Ordenar palavras da linha por X0
                     line_words = sorted(lines_data[y], key=lambda w: w['x0'])
                     line_text = " ".join([w['text'] for w in line_words]).upper()
                     
-                    if ("MT" in line_text or "BT" in line_text) and ("M" in line_text or "METROS" in line_text):
-                        # Identificar o ponto de início (MT/BT)
-                        start_idx = -1
-                        for j, word in enumerate(line_words):
-                            if word['text'].upper() in ["MT", "BT"]:
-                                start_idx = j; break
-                        
-                        if start_idx != -1:
-                            target_word = line_words[start_idx]
-                            w_key = (i, round(target_word['x0'], 1), round(target_word['top'], 1), round(target_word['x1'], 1), round(target_word['bottom'], 1))
-                            state = self.visual_states.get(w_key, 'EXISTING')
-                            
-                            if state != 'EXISTING':
-                                # Capturar tudo ate a metragem
-                                remaining_text = " ".join([w['text'] for w in line_words[start_idx:]]).upper()
-                                # Regex aprimorado: (MT ... ) (Qtd) M
-                                match = re.search(r'((?:MT|BT).*?)\s+([\d,.]+)\s*M', remaining_text)
-                                if match:
-                                    desc = match.group(1).strip()
-                                    raw_qty = match.group(2).replace(',', '.')
-                                    try:
-                                        qty = float(raw_qty)
-                                        tipo = 'MT' if 'MT' in desc else 'BT'
-                                        if state == 'REMOVAL':
-                                            desc += " (RETIRADA)"
-                                        cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
-                                    except: pass
+                    # Verificação Otimista: Tem alguma palavra chave?
+                    has_keyword = any(k in line_text for k in keywords)
+                    has_meter = "M" in line_text or "METROS" in line_text
+                    
+                    if has_keyword and has_meter:
+                         # Tentativa 1: Regex com Prefixo MT/BT
+                         match = re.search(r'((?:MT|BT).*?)\s+([\d,.]+)\s*(?:M|METROS)\b', line_text)
+                         
+                         # Tentativa 2: Regex Genérico (Captura tudo até a quantidade)
+                         if not match:
+                             match = re.search(r'(.*?)\s+([\d,.]+)\s*(?:M|METROS)\b', line_text)
+                             
+                         if match:
+                            desc = match.group(1).strip()
+                            raw_qty = match.group(2).replace(',', '.')
+                            try:
+                                qty = float(raw_qty)
+                                
+                                # SANITY CHECK: Ignorar valores absurdos (provavelmente coordenadas UTM)
+                                if qty > 10000:
+                                    continue
+                                
+                                # Inferir Tipo
+                                if "MT" in desc or "15KV" in desc or "25KV" in desc:
+                                    tipo = 'MT'
+                                else:
+                                    tipo = 'BT'
+                                    
+                                # Verificar estado visual (primeira palavra)
+                                first_word = line_words[0]
+                                w_key = (i, round(first_word['x0'], 1), round(first_word['top'], 1), round(first_word['x1'], 1), round(first_word['bottom'], 1))
+                                # Como o estado é aproximado, vamos confiar no 'NEW' se o texto for novo
+                                # Mas se a linha toda for existing, marcamos existing
+                                
+                                desc_final = desc
+                                cables_found.append({'Tipo': tipo, 'Desc': desc_final, 'Qtd': qty})
+                            except Exception as e:
+                                pass
+        return cables_found
         return cables_found
         return cables_found
 

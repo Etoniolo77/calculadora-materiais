@@ -40,6 +40,12 @@ MANUAL_EST_MAP = {
     'BR1579': [('30053140', 1), ('30053137', 1)], # Exemplo de composição para BR1579
 }
 
+# Ferragens de Fixação para Cintas (Poste Circular)
+FASTENER_BOLT = "30058226" # PARAFUSO CAB QUAD 16MM 125MM AC
+FASTENER_WASHER = "30050463" # ARRUELA LISA QUAD AC 16MM 38MM
+CROSSARM_STD = "30054575" # CRUZETA P/POSTE AC 1010/20 2,4M
+TRAFO_SUPPORT_TRI = "30060418" # SUPORTE TRANSF ACO POST CON CIR 210MM (Ativo série 3)
+
 class MaterialEngine:
     def __init__(self):
         self.desc_to_sap = {} 
@@ -51,6 +57,9 @@ class MaterialEngine:
         # Novo: Database Loader
         self.db_loader = None
         self.detected_cables = {'MT': None, 'BT': None} # Novo: Armazenar cabos detectados
+        self.audit_log = [] # Novo: Rastrear itens não encontrados (Gap Analysis)
+        
+
         
         # Mapeamento de Cintas (Braçadeiras) extraído dos Padrões Técnicos (.038)
         # Formato: (Tipo Poste, Estrutura) -> [(SAP, Qtd)]
@@ -99,11 +108,13 @@ class MaterialEngine:
         p_type = str(pole_type).upper()
         termos_busca = ['POSTE']
         
-        # Identificar tipo
+        # Identificar tipo e material
         if 'C' in p_type:
-            termos_busca.extend(['CIRCULAR', 'CONCR'])
-        elif 'DT' in p_type or 'DUPLO T' in p_type:
-            termos_busca.append('DUPLO')
+            termos_busca.extend(['CIRCULAR', 'CONCR', 'CIRC'])
+        elif 'DT' in p_type or 'DUPLO T' in p_type or 'D' in p_type:
+            # DUPLO T pode estar como DUPLO ou DT
+            termos_busca.extend(['DUPLO', 'DT'])
+            if 'DT' not in termos_busca: termos_busca.append('DT')
         
         # Extrair altura e carga
         import re
@@ -111,7 +122,6 @@ class MaterialEngine:
         if len(nums) >= 2:
             h = nums[0]
             c = nums[1]
-            # Adicionar variações de altura para cobrir "12M" e "12,0M"
             termos_busca.append(f'{h}M')
             termos_busca.append(f'{c}DAN')
         elif len(nums) == 1:
@@ -124,7 +134,7 @@ class MaterialEngine:
             if results:
                 return results[0][0], results[0][1] # code, desc
                 
-        return None, f"POSTE {p_type}"
+        return "VERIFICAR", f"POSTE {pole_type}"
 
     def clean_code(self, val):
         try:
@@ -165,65 +175,87 @@ class MaterialEngine:
                     return sap_code
         return None if code.startswith('9') else code
 
-    def resolve_clamps(self, pole_type, structures):
+    def resolve_clamps(self, pole_type, structures, p_id=""):
         """Retorna as braçadeiras E materiais das estruturas baseado no poste e estruturas."""
         mats = []
-        p_type = str(pole_type).replace('x', '/').replace(' ', '').upper() # Normaliza C12x1000 -> C12/1000
+        p_type_norm = str(pole_type).replace('x', '/').replace(' ', '').upper()
+        p_id_label = p_id if p_id else p_type_norm
         
-        # 1. Adicionar o próprio POSTE
-        if "(E)" in str(pole_type):
-            pass # Ignorar poste existente
-        else:
-            is_ret = "(R)" in str(pole_type)
-            p_clean = str(pole_type).replace("(R)", "").strip()
-            suffix = " (RETIRADA)" if is_ret else ""
-            
+        # 1. Adicionar o próprio POSTE (Somente se não for Existente e não for Remoção para instalação)
+        pole_str = str(pole_type).upper()
+        if "(E)" not in pole_str and "(R)" not in pole_str:
+            p_clean = pole_str.split('(')[0].strip()
             p_code, p_desc = self.get_pole_sap(p_clean)
-            if p_code:
-                mats.append({'Origem': 'Poste', 'Código SAP': p_code, 'Descrição': p_desc + suffix, 'Quantidade': 1})
-            else:
-                mats.append({'Origem': 'Poste', 'Código SAP': 'VERIFICAR', 'Descrição': f'POSTE {p_clean}{suffix}', 'Quantidade': 1})
+            mats.append({
+                'Origem': f'Poste {p_id}', 
+                'Código SAP': p_code, 
+                'Descrição': p_desc, 
+                'Quantidade': 1
+            })
 
-        # 2. Braçadeiras (mantém lógica existente)
+        # 2. Braçadeiras e Ferragens (Somente para Novos)
         for est_raw in structures:
-            if "(E)" in str(est_raw): continue # Ignorar existentes
-            is_ret = "(R)" in str(est_raw)
-            est = str(est_raw).replace("(R)", "").strip()
-            suffix = " (RETIRADA)" if is_ret else ""
+            est_str = str(est_raw).upper()
+            if "(E)" in est_str or "(R)" in est_str: continue # FILTRAGEM CRUCIAL: Ignorar desinstalação/existente
             
+            est = est_str.strip()
             est_cat = ''
-            if est.startswith('N'): est_cat = 'N'
+            if est.startswith('N') or est.startswith('ET'): est_cat = 'N'
             elif est.startswith('B'): est_cat = 'B'
             elif est.startswith('U'): est_cat = 'U'
-            elif 'S' in est: est_cat = 'S' # Cobre S1, 1S3, 1S4 etc
+            elif 'S' in est: est_cat = 'S'
+            elif est.startswith('M'): est_cat = 'N' # M costuma usar ferragem de N
             
-            lookup = (p_type, est_cat)
+            lookup = (p_type_norm.split('(')[0], est_cat)
             if lookup in self.clamp_logic:
                 for sap, qty in self.clamp_logic[lookup]:
-                    if self.db_loader and str(sap) in self.db_loader.sap_codes:
-                        desc = self.db_loader.sap_codes[str(sap)] + suffix
-                    else:
-                        desc = f"BRACADEIRA SAP {sap}{suffix}"
-                    
+                    desc = (self.db_loader.sap_codes.get(str(sap)) if self.db_loader else None) or f"BRACADEIRA SAP {sap}"
                     mats.append({
-                        'Origem': f'Ferragem {p_type}+{est}',
+                        'Origem': f'Ferragem {est} em {p_id}',
                         'Código SAP': sap,
                         'Descrição': desc,
                         'Quantidade': qty
                     })
         
-        # 3. NOVO: Explodir estruturas em materiais componentes
+        # 3. INJEÇÃO AUTOMÁTICA: Parafusos e Arruelas de fixação (Para cada cinta adicionada)
+        if "CIRCULAR" in p_type_norm or " C " in p_type_norm or pole_str.startswith('C'):
+            cintas_adicionadas = [m for m in mats if "CINTA" in m['Descrição'].upper() or "BRACADEIRA" in m['Descrição'].upper()]
+            for cinta in cintas_adicionadas:
+                # Cada cinta precisa de 1 parafuso e 2 arruelas
+                mats.append({
+                    'Origem': f'Fixação em {p_id}',
+                    'Código SAP': FASTENER_BOLT,
+                    'Descrição': self.db_loader.get_sap_description(FASTENER_BOLT) if self.db_loader else "PARAFUSO FIXACAO",
+                    'Quantidade': 1 * cinta['Quantidade']
+                })
+                mats.append({
+                    'Origem': f'Fixação em {p_id}',
+                    'Código SAP': FASTENER_WASHER,
+                    'Descrição': self.db_loader.get_sap_description(FASTENER_WASHER) if self.db_loader else "ARRUELA FIXACAO",
+                    'Quantidade': 2 * cinta['Quantidade']
+                })
+        
+        # 3. NOVO: Explodir estruturas em materiais componentes (Somente para Novos)
         if self.db_loader and self.is_loaded:
             for est_raw in structures:
-                if "(E)" in str(est_raw): continue # Ignorar existentes
-                is_ret = "(R)" in str(est_raw)
-                est = str(est_raw).replace("(R)", "").strip()
-                suffix = " (RETIRADA)" if is_ret else ""
-
+                est_str = str(est_raw).upper()
+                if "(E)" in est_str or "(R)" in est_str: continue # FILTRAGEM CRUCIAL
+                
+                est = est_str.strip()
                 structure_materials = self.db_loader.explode_structure(est, pole_type_str=pole_type)
+                
+                # Auditoria (Gap Analysis): Apenas para itens de instalação
+                if not structure_materials or (len(structure_materials) == 1 and structure_materials[0]['code'] == 'VERIFICAR'):
+                    self.audit_log.append({
+                        'type': 'Estrutura Não Encontrada',
+                        'item': est,
+                        'source': f'Poste {pole_type}',
+                        'severity': 'Alta'
+                    })
+
                 for mat in structure_materials:
                     code = mat['code']
-                    desc = str(mat['desc']) + suffix
+                    desc = str(mat['desc'])
                     qty = mat['qty']
                     
                     desc_upper = desc.upper()
@@ -311,11 +343,20 @@ class MaterialEngine:
                              desc = f"PARAFUSO CAB QUAD 16MM 400MM AC{suffix}"
 
                     mats.append({
-                        'Origem': f'Estrutura {est}',
+                        'Origem': f'Estrutura {est} em {p_id}',
                         'Código SAP': code,
                         'Descrição': desc,
                         'Quantidade': qty
                     })
+                    
+                    # INJEÇÃO: Cruzeta para estruturas de montagem (B2F, ET1T etc)
+                    if est in ['B2F', 'ET1T', 'ET4A'] and CROSSARM_STD not in [m['Código SAP'] for m in mats]:
+                         mats.append({
+                            'Origem': f'Suporte em {p_id}',
+                            'Código SAP': CROSSARM_STD,
+                            'Descrição': self.db_loader.get_sap_description(CROSSARM_STD),
+                            'Quantidade': 1
+                        })
         
         return mats
     
@@ -587,7 +628,7 @@ class MaterialEngine:
         
         if pole_mapping:
             for p_id, data in pole_mapping.items():
-                clamp_mats = self.resolve_clamps(data['Pole'], data['Est'])
+                clamp_mats = self.resolve_clamps(data['Pole'], data['Est'], p_id=p_id)
                 results.extend(clamp_mats)
 
         return results
@@ -597,12 +638,13 @@ class MaterialEngine:
         Processa os dados vindos do Grid do novo app.py
         pole_map: {'P1': {'Pole': ..., 'Est': [], 'Trafo': ..., 'Chave': ..., 'Estai': 2, ...}}
         """
+        self.audit_log = [] # Resetar log antes de processar novo formulário
         results = []
         
         for p_id, data in pole_map.items():
             # 1. Poste e Estruturas (Reutiliza lógica existente)
             # resolve_clamps já adiciona o poste e as ferragens das estruturas
-            clamp_mats = self.resolve_clamps(data['Pole'], data['Est'])
+            clamp_mats = self.resolve_clamps(data['Pole'], data['Est'], p_id=p_id)
             results.extend(clamp_mats)
             
             # 2. Transformador
@@ -620,7 +662,8 @@ class MaterialEngine:
                 kit_key = None
                 if "MONO" in t_val:
                     kit_key = "TRAFO_MONO"
-                elif "TRI" in t_val and "45" in t_val:
+                else:
+                    # Todos os trifásicos (45, 75, 112.5 etc) usam o kit expandido
                     kit_key = "TRAFO_TRI_45"
                 
                 if kit_key and self.db_loader and self.db_loader.unified_db:
@@ -631,6 +674,15 @@ class MaterialEngine:
                             'Código SAP': m['sap'],
                             'Descrição': m['desc'],
                             'Quantidade': m['qty']
+                        })
+                    
+                    # Injetar Suporte de Trafo para Postes Circulares
+                    if "C" in str(data['Pole']).upper():
+                        results.append({
+                            'Origem': f"Suporte Trafo {p_id}",
+                            'Código SAP': TRAFO_SUPPORT_TRI,
+                            'Descrição': self.db_loader.get_sap_description(TRAFO_SUPPORT_TRI),
+                            'Quantidade': 1
                         })
 
             # 3. Chave
@@ -708,11 +760,37 @@ class MaterialEngine:
                 tipo_ramal = val_ramal.get('Type', '')
                 
                 if qtd_ramal > 0 and tipo_ramal:
-                    # Tentar encontrar SAP para o tipo de cabo (pode usar resolve_cables ou direto)
                     code, desc = self.resolve_ramal_direct(tipo_ramal)
                     results.append({'Origem': f"Ramal {p_id}", 'Código SAP': code, 'Descrição': desc, 'Quantidade': qtd_ramal})
 
+        # Agregação Final para remover duplicatas e somar quantidades
+        results = self.aggregate_materials(results)
         return results
+
+    def aggregate_materials(self, materials_list):
+        """Agrega materiais por Código SAP, somando quantidades e unindo origens."""
+        aggregated = {}
+        for mat in materials_list:
+            sap = str(mat['Código SAP'])
+            
+            # FILTRO DE SEGURANÇA: Remover materiais desativados (Série 9)
+            if sap.startswith('9'):
+                continue
+                
+            # Se for um item sem SAP (ex: VERIFICAR), usar a descrição como chave secundária
+            key = sap if sap != 'VERIFICAR' and sap is not None else f"VERIFICAR-{mat['Descrição']}"
+            
+            if key in aggregated:
+                aggregated[key]['Quantidade'] += mat['Quantidade']
+                # Adicionar origem se não for muito longa e não estiver duplicada
+                current_orig = aggregated[key]['Origem']
+                new_orig = mat['Origem']
+                if len(current_orig) < 150 and new_orig not in current_orig:
+                     aggregated[key]['Origem'] += f", {new_orig}"
+            else:
+                aggregated[key] = mat.copy()
+        
+        return list(aggregated.values())
 
     def process_cables(self, cables_list):
         """
