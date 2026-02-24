@@ -178,7 +178,8 @@ class MaterialEngine:
     def resolve_clamps(self, pole_type, structures, p_id=""):
         """Retorna as braçadeiras E materiais das estruturas baseado no poste e estruturas."""
         mats = []
-        p_type_norm = str(pole_type).replace('x', '/').replace(' ', '').upper()
+        p_type = str(pole_type).upper()
+        p_type_norm = p_type.replace('x', '/').replace(' ', '')
         p_id_label = p_id if p_id else p_type_norm
         
         # 1. Adicionar o próprio POSTE (Somente se não for Existente e não for Remoção para instalação)
@@ -239,6 +240,7 @@ class MaterialEngine:
         if self.db_loader and self.is_loaded:
             for est_raw in structures:
                 est_str = str(est_raw).upper()
+                suffix = " (RETIRADA)" if "(R)" in est_str else ""
                 if "(E)" in est_str or "(R)" in est_str: continue # FILTRAGEM CRUCIAL
                 
                 est = est_str.strip()
