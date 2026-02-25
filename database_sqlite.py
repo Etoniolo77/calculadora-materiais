@@ -81,7 +81,7 @@ class SQLiteDatabaseLoader:
     def load_all(self, force_legacy: bool = False) -> None:
         """Conecta ao banco SQLite."""
         if not self.db_path.exists():
-            print(f"⚠ Banco SQLite não encontrado: {self.db_path}")
+            print(f"[AVISO] Banco SQLite nao encontrado: {self.db_path}")
             print("  Execute 'python migrate_to_sqlite.py' primeiro.")
             return
         
@@ -96,7 +96,7 @@ class SQLiteDatabaseLoader:
             cursor = self.conn.execute("SELECT COUNT(*) FROM estruturas")
             est_count = cursor.fetchone()[0]
             
-            print(f"✓ SQLite conectado: {mat_count} materiais, {est_count} estruturas")
+            print(f"[OK] SQLite conectado: {mat_count} materiais, {est_count} estruturas")
             
             # Carregar unified_db.json para metadados (cinta_lookup, etc)
             unified_path = self.base_dir / "unified_db.json"
@@ -104,7 +104,7 @@ class SQLiteDatabaseLoader:
                 import json
                 with open(unified_path, 'r', encoding='utf-8') as f:
                     self.unified_db = json.load(f)
-                print("✓ Unified DB carregado para metadados")
+                print("[OK] Unified DB carregado para metadados")
             
             self.is_loaded = True
             
@@ -293,7 +293,7 @@ class SQLiteDatabaseLoader:
             })
         
         if not materials:
-            print(f"⚠ Estrutura {structure_code} não encontrada no SQLite")
+            print(f"[AVISO] Estrutura {structure_code} nao encontrada no SQLite")
             return [{'code': 'VERIFICAR', 'desc': f'VERIFICAR ESTRUTURA {structure_code}', 'qty': 1}]
         
         return materials

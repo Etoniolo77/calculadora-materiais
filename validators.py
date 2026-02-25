@@ -1,5 +1,7 @@
 """
-Validação Técnica - Regras de engenharia para redes de distribuição
+=== PROPOSTA DE ALTERAÇÃO - validators.py ===
+Corrige: B4 (unidade de esforço "kg" → "daN")
+Veja: RELATORIO_INCONSISTENCIAS.md para detalhes
 """
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
@@ -18,7 +20,7 @@ class TechnicalIssue:
     code: str
     message: str
     severity: IssueSeverity
-    source: str  # Referência (página, item)
+    source: str
     suggestion: Optional[str] = None
     
     def to_dict(self) -> Dict:
@@ -35,9 +37,9 @@ class TechnicalIssue:
 class ExtractionItem:
     """Item extraído com metadados de rastreabilidade"""
     value: str
-    item_type: str  # 'pole', 'structure', 'cable', 'equipment'
+    item_type: str
     page: int = 0
-    bbox: tuple = field(default_factory=tuple)  # (x0, y0, x1, y1)
+    bbox: tuple = field(default_factory=tuple)
     source_text: str = ""
     confidence: float = 1.0
     
@@ -63,7 +65,7 @@ class TechnicalValidator:
     - Configurações de equipamentos
     """
     
-    # Regras de esforço mínimo por equipamento
+    # Regras de esforço mínimo por equipamento (em daN)
     ESFORCO_MINIMO = {
         'trafo_15kva': 300,
         'trafo_25kva': 300,
@@ -79,7 +81,7 @@ class TechnicalValidator:
     
     # Vão máximo por bitola de condutor (metros)
     VAO_MAXIMO = {
-        '35': 60,    # 35 mm²
+        '35': 60,
         '50': 55,
         '70': 50,
         '120': 45,
@@ -94,7 +96,7 @@ class TechnicalValidator:
     
     # Altura mínima do poste por nível de tensão
     ALTURA_MINIMA = {
-        'bt': 9,     # metros
+        'bt': 9,
         'mt': 11,
         'at': 13,
     }
@@ -111,23 +113,15 @@ class TechnicalValidator:
     def validate(self, extraction: Dict) -> List[TechnicalIssue]:
         """
         Executa todas as validações no resultado da extração.
-        
-        Args:
-            extraction: Dicionário com pole_map, cables, equipments
-            
-        Returns:
-            Lista de issues encontradas
         """
         self.issues = []
         
         pole_map = extraction.get('pole_map', {})
         cables = extraction.get('cables', [])
         
-        # Validar cada poste
         for pole_id, pole_data in pole_map.items():
             self._validate_pole(pole_id, pole_data)
         
-        # Validar cabos
         for cable in cables:
             self._validate_cable(cable)
         
@@ -140,18 +134,14 @@ class TechnicalValidator:
         structures = pole_data.get('Est', [])
         trafo = pole_data.get('Trafo')
         
-        # Extrair informações do poste
         pole_info = self._parse_pole_type(pole_type)
         
-        # 1. Validar esforço para transformador
         if trafo:
             self._validate_trafo_esforco(pole_id, pole_info, trafo)
         
-        # 2. Validar compatibilidade estrutura × tipo de poste
         for est in structures:
             self._validate_structure_pole_compatibility(pole_id, est, pole_info)
         
-        # 3. Validar altura mínima
         if pole_info.get('altura'):
             self._validate_altura_minima(pole_id, pole_info, structures)
     
@@ -160,13 +150,10 @@ class TechnicalValidator:
         desc = cable.get('Desc', '')
         qty = cable.get('Qtd', 0)
         
-        # Extrair bitola do cabo
         bitola = self._extract_bitola(desc)
         
         if bitola and bitola in self.VAO_MAXIMO:
             max_vao = self.VAO_MAXIMO[bitola]
-            # Heurística: se metragem > 3x vão máximo, provavelmente OK (vários vãos)
-            # Se metragem ~ vão máximo, verificar
             if qty > max_vao and qty < max_vao * 2:
                 self.issues.append(TechnicalIssue(
                     code="VAO_001",
@@ -178,11 +165,10 @@ class TechnicalValidator:
     
     def _validate_trafo_esforco(self, pole_id: str, pole_info: Dict, trafo: str):
         """Valida se esforço do poste comporta o transformador"""
+        import re
         
         esforco = pole_info.get('esforco', 0)
         
-        # Extrair potência do trafo (ex: "TRI-75kVA" -> 75)
-        import re
         match = re.search(r'(\d+)\s*kva', trafo.lower())
         if match:
             potencia = int(match.group(1))
@@ -192,23 +178,22 @@ class TechnicalValidator:
                 esforco_min = self.ESFORCO_MINIMO[key]
                 
                 if esforco < esforco_min:
+                    # [FIX B4] Unidade corrigida de "kg" para "daN"
                     self.issues.append(TechnicalIssue(
                         code="ESF_001",
-                        message=f"Poste {pole_id} com esforço {esforco}kg insuficiente para {trafo}",
+                        message=f"Poste {pole_id} com esforço {esforco} daN insuficiente para {trafo}",
                         severity=IssueSeverity.ERROR,
                         source=pole_id,
-                        suggestion=f"Esforço mínimo recomendado: {esforco_min}kg"
+                        suggestion=f"Esforço mínimo recomendado: {esforco_min} daN"
                     ))
     
     def _validate_structure_pole_compatibility(self, pole_id: str, structure: str, pole_info: Dict):
         """Valida compatibilidade estrutura × tipo de poste"""
         
-        # Remover sufixos como (R) de remoção
         struct_clean = structure.replace('(R)', '').strip().upper()
         
         is_dt = pole_info.get('is_dt', False)
         
-        # Estrutura exige DT mas poste é circular?
         if struct_clean in self.ESTRUTURAS_DT_OBRIGATORIO and not is_dt:
             self.issues.append(TechnicalIssue(
                 code="COMP_001",
@@ -218,7 +203,6 @@ class TechnicalValidator:
                 suggestion=f"Substituir por poste tipo DT"
             ))
         
-        # Estrutura é típica de circular mas poste é DT? (warning, não erro)
         if struct_clean in self.ESTRUTURAS_CIRCULAR_OBRIGATORIO and is_dt:
             self.issues.append(TechnicalIssue(
                 code="COMP_002",
@@ -233,7 +217,6 @@ class TechnicalValidator:
         
         altura = pole_info.get('altura', 0)
         
-        # Determinar nível de tensão pelas estruturas
         has_mt = any(s.upper().startswith(('N', 'B', 'U', 'M', 'CE', 'TE')) for s in structures)
         nivel = 'mt' if has_mt else 'bt'
         
@@ -268,11 +251,9 @@ class TechnicalValidator:
         
         pole_upper = pole_type.upper().replace('(E)', '').strip()
         
-        # Detectar DT
         if pole_upper.startswith('DT') or pole_upper.startswith('RT'):
             info['is_dt'] = True
         
-        # Extrair altura e esforço: "DT12/1000", "C11/600", "12/400"
         match = re.search(r'(\d{1,2})[/xX](\d{3,4})', pole_upper)
         if match:
             info['altura'] = int(match.group(1))
@@ -284,7 +265,6 @@ class TechnicalValidator:
         """Extrai bitola do cabo da descrição"""
         import re
         
-        # Padrões: "35mm²", "1/0", "4/0", "336MCM", "70 mm"
         match = re.search(r'(\d+(?:/\d)?)\s*(?:mm|mcm)?', cable_desc.lower())
         if match:
             return match.group(1)
@@ -306,10 +286,8 @@ class TechnicalValidator:
 
 
 if __name__ == "__main__":
-    # Teste
     validator = TechnicalValidator()
     
-    # Dados de teste
     extraction = {
         'pole_map': {
             'P2': {'Pole': 'C11/400', 'Est': ['N1', 'B2'], 'Trafo': 'TRI-75kVA'},

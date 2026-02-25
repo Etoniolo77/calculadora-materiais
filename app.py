@@ -873,7 +873,6 @@ with col_results:
                     st.session_state.bom_df = edited_bom
 
             total_itens = len(st.session_state.bom_df)
-            total_itens = len(st.session_state.bom_df)
             # Removido total de peças conforme solicitado (unidades mistas causavam confusão)
             st.caption(f"**Total:** {total_itens} itens distintos")
             
