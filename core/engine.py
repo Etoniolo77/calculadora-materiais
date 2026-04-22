@@ -279,6 +279,79 @@ class MaterialEngine:
         sap = str(mat.get("Código SAP", "") or "")
         mat["Confiança"] = 0.2 if sap.upper().startswith("VERIFICAR") else 0.9
         return mat
+
+    def _resolve_verificar_parafuso(self, code: str, desc: str, structure_code: str = ""):
+        """
+        Resolve automaticamente itens VERIFICAR de parafuso M16 x comprimento.
+        Retorna (code, desc) resolvido ou (code, desc) original quando não achar.
+        """
+        code_str = str(code or "").upper()
+        desc_str = str(desc or "")
+        desc_up = desc_str.upper()
+
+        if not self.db_loader:
+            return code, desc
+        if "PARAF" not in desc_up:
+            return code, desc
+        if "VERIFICAR" not in code_str:
+            return code, desc
+
+        # Extrai comprimento de "M16 x 400", "16MM 400MM", etc.
+        length_mm = None
+        m = re.search(r'M\s*16\s*[Xx]\s*(\d{2,4})', desc_up)
+        if m:
+            length_mm = m.group(1)
+        if not length_mm:
+            m = re.search(r'16\s*MM.*?(\d{2,4})\s*MM', desc_up)
+            if m:
+                length_mm = m.group(1)
+        if not length_mm and "..." in desc_up:
+            est_up = str(structure_code or "").upper().strip()
+            # Heurística de engenharia: estruturas secundárias 1S3/1S4 usam, em geral,
+            # parafuso M16 x 250mm para fixação em poste.
+            if est_up in {"1S3", "1S4", "S3", "S4", "1S3(1)", "1S4(1)"}:
+                length_mm = "250"
+        if not length_mm:
+            return code, desc
+
+        terms = ["PARAFUSO", "16MM", f"{length_mm}MM"]
+
+        # Refina tipo do parafuso quando a descrição já trouxer pista.
+        if "FRANCES" in desc_up:
+            terms.append("FRANCES")
+        if "OLHAL" in desc_up:
+            terms.append("OLHAL")
+        if "QUAD" in desc_up or "CAB" in desc_up:
+            terms.append("QUAD")
+
+        candidates = self.db_loader.find_material_by_description(
+            terms,
+            limit=12,
+            exclude_terms=["PORCA", "ARRUELA", "SUPORTE", "CONECTOR"],
+        )
+        if not candidates:
+            return code, desc
+
+        # Seleção estável:
+        # 1) deve conter 16MM e comprimento exato
+        # 2) preferir AC
+        # 3) preferir série 30058 (cadastro consolidado no projeto)
+        # 4) maior score original
+        filtered = []
+        for sap, sap_desc, score in candidates:
+            d = str(sap_desc).upper()
+            if "16MM" not in d or f"{length_mm}MM" not in d:
+                continue
+            ac_bonus = 1 if " AC" in d else 0
+            family_bonus = 1 if str(sap).startswith("30058") else 0
+            filtered.append((sap, sap_desc, score, ac_bonus, family_bonus))
+
+        if not filtered:
+            return code, desc
+
+        filtered.sort(key=lambda x: (x[4], x[3], float(x[2])), reverse=True)
+        best = filtered[0]
+        return best[0], best[1]
     
     def load_databases(self):
         """Carrega todas as bases de dados"""
@@ -538,13 +611,10 @@ class MaterialEngine:
                             })
                         continue
 
-                    # Correção Específica para Parafusos M16x400
-                    if (code == "VERIFICAR-POSTE" or "VERIFICAR" in code) and "PARAFUSO" in desc_upper and "400" in desc_upper:
-                         code = "30058241"
-                         if self.db_loader and code in self.db_loader.sap_codes:
-                             desc = self.db_loader.sap_codes[code] + suffix
-                         else:
-                             desc = f"PARAFUSO CAB QUAD 16MM 400MM AC{suffix}"
+                    # Correção automática para VERIFICAR-POSTE de parafusos M16 x comprimento
+                    code, resolved_desc = self._resolve_verificar_parafuso(code, desc, structure_code=est)
+                    if resolved_desc:
+                        desc = str(resolved_desc) + suffix if suffix and suffix not in str(resolved_desc) else str(resolved_desc)
 
                     mats.append({
                         'Origem': f'Estrutura {est} em {p_id}',
