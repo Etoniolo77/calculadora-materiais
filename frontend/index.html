@@ -33,13 +33,46 @@
     </section>
 
     <section class="card">
-      <h2>3. Poles (JSON editavel)</h2>
-      <textarea id="polesJson" rows="12" spellcheck="false"></textarea>
+      <h2>3. Postes (edicao assistida)</h2>
+      <div class="row">
+        <button id="btnAddPole" type="button">Adicionar Poste</button>
+      </div>
+      <div class="tableWrap">
+        <table id="polesTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Tipo Poste</th>
+              <th>Estruturas</th>
+              <th>Trafo</th>
+              <th>Chave</th>
+              <th>Estai Qtd</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card">
-      <h2>4. Cabos (JSON editavel)</h2>
-      <textarea id="cablesJson" rows="8" spellcheck="false"></textarea>
+      <h2>4. Cabos (edicao assistida)</h2>
+      <div class="row">
+        <button id="btnAddCable" type="button">Adicionar Cabo</button>
+      </div>
+      <div class="tableWrap">
+        <table id="cablesTable">
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Descricao</th>
+              <th>Qtd (m)</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card">

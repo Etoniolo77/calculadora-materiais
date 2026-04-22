@@ -363,7 +363,22 @@ class MaterialEngine:
         p_type = str(pole_type).upper()
         p_type_norm = p_type.replace('x', '/').replace(' ', '')
         p_id_label = p_id if p_id else p_type_norm
-        
+        est_cats_with_clamp_logic = set()
+
+        def _get_est_cat(est_code):
+            est_cat = ''
+            if est_code.startswith('N') or est_code.startswith('ET'):
+                est_cat = 'N'
+            elif est_code.startswith('B'):
+                est_cat = 'B'
+            elif est_code.startswith('U'):
+                est_cat = 'U'
+            elif 'S' in est_code:
+                est_cat = 'S'
+            elif est_code.startswith('M'):
+                est_cat = 'N'
+            return est_cat
+
         # 1. Adicionar o próprio POSTE
         pole_str = str(pole_type).upper()
         if "(E)" not in pole_str and "(R)" not in pole_str:
@@ -382,15 +397,11 @@ class MaterialEngine:
             if "(E)" in est_str or "(R)" in est_str: continue
             
             est = est_str.strip()
-            est_cat = ''
-            if est.startswith('N') or est.startswith('ET'): est_cat = 'N'
-            elif est.startswith('B'): est_cat = 'B'
-            elif est.startswith('U'): est_cat = 'U'
-            elif 'S' in est: est_cat = 'S'
-            elif est.startswith('M'): est_cat = 'N'
+            est_cat = _get_est_cat(est)
             
             lookup = (p_type_norm.split('(')[0], est_cat)
             if lookup in self.clamp_logic:
+                est_cats_with_clamp_logic.add(est_cat)
                 for sap, qty in self.clamp_logic[lookup]:
                     desc = (self.db_loader.sap_codes.get(str(sap)) if self.db_loader else None) or f"BRACADEIRA SAP {sap}"
                     mats.append({
@@ -448,10 +459,21 @@ class MaterialEngine:
                     code = mat['code']
                     desc = str(mat['desc'])
                     qty = mat['qty']
+                    est_cat = _get_est_cat(est)
                     
                     desc_upper = desc.upper()
+                    is_cinta_bracadeira = (
+                        ("CINTA" in desc_upper or "BRAÇADEIRA" in desc_upper or "BRACADEIRA" in desc_upper)
+                        and "ALÇA" not in desc_upper
+                    )
+
+                    # Evita dupla contagem de cintas: se a categoria da estrutura já foi
+                    # resolvida pela clamp_logic, ignora a cinta vinda da explosão de kit.
+                    if is_cinta_bracadeira and est_cat in est_cats_with_clamp_logic:
+                        continue
+
                     # --- LÓGICA DE CINTAS DINÂMICAS ---
-                    if ("CINTA" in desc_upper or "BRAÇADEIRA" in desc_upper) and "ALÇA" not in desc_upper:
+                    if is_cinta_bracadeira:
                         cat = "CINTA 1"
                         if "ESTAI" in desc_upper: cat = "ESTAI 1"
                         elif "NIVEL" in desc_upper: cat = "NIVEL 1"
