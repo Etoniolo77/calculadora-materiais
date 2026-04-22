@@ -88,3 +88,23 @@ Para Copilot endpoint corporativo:
 ## 10. Observações de ambiente
 - Em máquinas com hardening, `venv/ensurepip` pode falhar por política de permissão.
 - Nesses casos, usar fallback com Python global e manter o runtime validado.
+
+---
+
+## 11. Opcao recomendada (sem WebSocket): FastAPI + HTML
+
+Quando houver instabilidade de renderizacao no Streamlit via IIS, usar stack FastAPI:
+
+```powershell
+.\scripts\start_internal_fastapi.ps1 -UseSystemPython
+.\scripts\healthcheck_internal_fastapi.ps1 -BindAddress 127.0.0.1 -Port 8600
+```
+
+Aplicar template IIS da FastAPI (PowerShell como administrador):
+
+```powershell
+.\scripts\configure_iis_reverse_proxy_fastapi.ps1 -SitePath "C:\inetpub\wwwroot\calculadora-local"
+```
+
+URL final:
+- `http://localhost:8080`

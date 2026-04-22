@@ -4,3 +4,6 @@ pdfplumber
 reportlab
 openpyxl
 anthropic>=0.40.0  # opcional: modo de extração avançada via IA
+fastapi
+uvicorn[standard]
+python-multipart

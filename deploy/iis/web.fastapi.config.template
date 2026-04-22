@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <clear />
+        <rule name="ReverseProxyToFastAPI" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:8600/{R:1}" logRewrittenUrl="true" />
+        </rule>
+      </rules>
+    </rewrite>
+    <urlCompression doStaticCompression="false" doDynamicCompression="false" />
+  </system.webServer>
+</configuration>

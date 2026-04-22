@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora de Materiais - FastAPI</title>
+  <link rel="stylesheet" href="/frontend/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Calculadora de Materiais</h1>
+    <p class="subtitle">Stack FastAPI + HTML/JS (sem Streamlit/WebSocket)</p>
+
+    <section class="card">
+      <h2>1. Extracao do PDF</h2>
+      <div class="row">
+        <input id="pdfFile" type="file" accept=".pdf" />
+        <button id="btnExtract">Extrair</button>
+      </div>
+      <p id="extractStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>2. Dados do Projeto</h2>
+      <div class="grid3">
+        <label>Ordem<input id="ordem" type="text" /></label>
+        <label>Equipe<input id="equipe" type="text" /></label>
+        <label>Programador<input id="programador" type="text" /></label>
+      </div>
+      <label>Observacoes
+        <textarea id="observacoes" rows="3" placeholder="Observacoes para o relatorio PDF"></textarea>
+      </label>
+    </section>
+
+    <section class="card">
+      <h2>3. Poles (JSON editavel)</h2>
+      <textarea id="polesJson" rows="12" spellcheck="false"></textarea>
+    </section>
+
+    <section class="card">
+      <h2>4. Cabos (JSON editavel)</h2>
+      <textarea id="cablesJson" rows="8" spellcheck="false"></textarea>
+    </section>
+
+    <section class="card">
+      <h2>5. Calculo</h2>
+      <div class="row">
+        <button id="btnCalculate">Calcular BOM</button>
+        <button id="btnDownloadCsv" disabled>Baixar CSV</button>
+        <button id="btnDownloadPdf" disabled>Baixar PDF</button>
+      </div>
+      <p id="calcStatus" class="status"></p>
+      <div id="validationBox"></div>
+      <div class="tableWrap">
+        <table id="bomTable">
+          <thead>
+            <tr>
+              <th>Codigo SAP</th>
+              <th>Descricao</th>
+              <th>Quantidade</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/frontend/app.js"></script>
+</body>
+</html>

@@ -134,3 +134,14 @@ Foram identificadas duas causas estruturais combinadas:
 - Correção estrutural implementada no repositório (IIS + scripts + config Streamlit).
 - Fluxo operacional padronizado para evitar regressão de publicação.
 - Se persistir instabilidade residual no host atual, próxima ação recomendada é executar com Python 3.12 LTS para eliminar risco específico do stack `Python 3.14 + watchdog` no Windows.
+
+## 12. Decisao de Arquitetura (2026-04-22)
+Como o frontend continuou em loading infinito mesmo com handshake e endpoints internos validados, foi aprovada migracao de stack para eliminar dependencia de WebSocket no IIS.
+
+Nova direcao:
+- Backend FastAPI (`backend/app_fastapi.py`)
+- Frontend estatico HTML/JS (`frontend/`)
+- Reuso da logica de negocio em `core/` (extractor, engine, validators, final_report)
+
+Documentacao operacional da migracao:
+- `docs/MIGRACAO_STACK_FASTAPI.md`
