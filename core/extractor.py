@@ -6,6 +6,9 @@ Veja: RELATORIO_INCONSISTENCIAS.md para detalhes
 import pdfplumber
 import re
 import math
+import json
+import base64
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -55,12 +58,16 @@ class ProjectExtractor:
         
         # Log de extração com rastreabilidade
         self.extraction_log: List[Dict] = []
-        
+
         # Equipamentos extraídos
         self.equipments: List[Dict] = []
-        
+
         # Metadados por item
         self.metadata_cache: Dict[str, ExtractionMetadata] = {}
+
+        # Cache texto → lista de estados (populado em _analyze_page_visuals)
+        # Permite que get_word_state() filtre por texto real da palavra
+        self._text_state_cache: Dict[str, List[str]] = {}
 
     def extract_text(self):
         try:
@@ -126,32 +133,50 @@ class ProjectExtractor:
                             break
             
             self.visual_states[w_key] = state
-            
+
+            # Popular cache texto→estado para get_word_state()
+            txt_key = w['text'].strip().upper()
+            if txt_key:
+                self._text_state_cache.setdefault(txt_key, []).append(state)
+
         return rect_zones, lines
 
-    def get_word_state(self, word_text, search_area_text):
+    def get_word_state(self, word_text: str, search_area_text: str = "") -> str:
         """
-        [FIX M5] Implementação real do método (antes era placeholder).
-        Busca o estado visual de uma palavra no cache visual_states.
-        Retorna o estado mais frequente encontrado para o texto dado.
+        Retorna o estado visual (NEW / EXISTING / REMOVAL) de uma palavra.
+
+        Prioridade de lookup:
+        1. Correspondência exata no _text_state_cache (texto → lista de estados).
+        2. Correspondência parcial: alguma chave do cache CONTÉM word_text.
+        3. Fallback: EXISTING (sem evidência visual).
+
+        O estado retornado é o mais frequente entre as ocorrências encontradas.
         """
-        if not self.visual_states:
-            return 'EXISTING'  # Se não temos dados visuais, assumir existente
-        
-        # Buscar no cache por texto correspondente
-        matching_states = []
-        for (p, x0, y0, x1, y1), state in self.visual_states.items():
-            # Como não temos o texto exato no cache (apenas coordenadas),
-            # retornamos o estado mais provável baseado nas ocorrências
-            matching_states.append(state)
-        
-        if not matching_states:
+        if not self._text_state_cache:
             return 'EXISTING'
-        
-        # Retornar o estado mais frequente
+
         from collections import Counter
-        state_counts = Counter(matching_states)
-        return state_counts.most_common(1)[0][0]
+
+        key = word_text.strip().upper()
+        if not key:
+            return 'EXISTING'
+
+        # 1. Correspondência exata
+        if key in self._text_state_cache:
+            counts = Counter(self._text_state_cache[key])
+            return counts.most_common(1)[0][0]
+
+        # 2. Correspondência parcial (word_text contido em alguma chave do cache)
+        matching_states = []
+        for cached_text, states in self._text_state_cache.items():
+            if key in cached_text or cached_text in key:
+                matching_states.extend(states)
+
+        if matching_states:
+            counts = Counter(matching_states)
+            return counts.most_common(1)[0][0]
+
+        return 'EXISTING'
 
     def extract_project_info(self):
         """Tenta extrair informações de cabeçalho prioritariamente DIAGRAMA."""
@@ -368,11 +393,35 @@ class ProjectExtractor:
 
                 
                 # RECONSTRUÇÃO ESPACIAL: Agrupar caracteres fragmentados
+                # PDFs CAD-convertidos fragmentam tokens como "N4F" em "N", "4", "F"
+                # com gaps variáveis. A estratégia:
+                #   1. Ordenar por linha (top) e depois por x0
+                #   2. Unir fragmentos na mesma linha com gap_x < GAP_MAX_PX
+                #   3. Inserir espaço apenas se gap_x > SPACE_MIN_PX (evitar "N 4 F")
+                #   4. Tolerar variação vertical de até VERT_TOL_PX (texto levemente inclinado)
                 words = []
+                GAP_MAX_PX   = 18   # era 12 — aumentado para cobrir fragmentação CAD
+                SPACE_MIN_PX = 3    # gap acima disto → inserir espaço (palavra separada real)
+                VERT_TOL_PX  = 12   # era 10 — tolerância linha base
+
+                # Mapa de substituição de ligaduras/caracteres especiais de PDF
+                _CID_RE = re.compile(r'\(cid:\d+\)', re.IGNORECASE)
+                _LIGATURE_MAP = {
+                    'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬀ': 'ff', 'ﬃ': 'ffi', 'ﬄ': 'ffl',
+                    '\u0000': '', '\ufffd': '',
+                }
+
+                def _clean_fragment(t: str) -> str:
+                    t = _CID_RE.sub('', t)
+                    for src, dst in _LIGATURE_MAP.items():
+                        t = t.replace(src, dst)
+                    return t.replace('(CID:13)', '').replace('(CID:3)', '').strip()
+
                 if raw_words:
-                    raw_words.sort(key=lambda w: (w['top'], w['x0']))
+                    raw_words.sort(key=lambda w: (round(w['top'], 1), w['x0']))
                     current_word = raw_words[0].copy()
-                    
+                    current_word['text'] = _clean_fragment(current_word['text'])
+
                     # Altura máxima do diagrama (excluir legendas de rodapé: >85% da página)
                     page_h = page.height
                     legend_y_threshold = page_h * 0.85
@@ -390,32 +439,53 @@ class ProjectExtractor:
                         return 'EXISTING'
 
                     current_word['state'] = get_frag_state(current_word)
-                    
+
                     for next_w in raw_words[1:]:
-                        dist_x = next_w['x0'] - current_word['x1']
-                        if abs(next_w['top'] - current_word['top']) < 10 and -2 <= dist_x < 12:
-                            is_decimal = (next_w['text'] == ',' or current_word['text'].endswith(',')) and re.match(r'\d', next_w['text'] or current_word['text'][-1:])
-                            if dist_x > 1 and not is_decimal:
-                                current_word['text'] += " "
-                            current_word['text'] += next_w['text']
-                            current_word['x1'] = next_w['x1']
+                        next_text = _clean_fragment(next_w['text'])
+                        if not next_text:
+                            continue
+                        dist_x  = next_w['x0'] - current_word['x1']
+                        dist_y  = abs(next_w['top'] - current_word['top'])
+
+                        # Detectar separador decimal: "3,60" → não inserir espaço
+                        is_decimal = (
+                            (next_text == ',' or current_word['text'].endswith(','))
+                            and bool(re.match(r'\d', next_text))
+                        )
+
+                        if dist_y < VERT_TOL_PX and -2 <= dist_x < GAP_MAX_PX:
+                            # Mesmo token: unir
+                            sep = '' if (dist_x <= SPACE_MIN_PX or is_decimal) else ' '
+                            current_word['text'] += sep + next_text
+                            current_word['x1']     = next_w['x1']
                             current_word['bottom'] = max(current_word['bottom'], next_w['bottom'])
-                            
+
                             ns = get_frag_state(next_w)
                             if ns == 'REMOVAL' or current_word['state'] == 'REMOVAL':
                                 current_word['state'] = 'REMOVAL'
                             elif ns == 'NEW' or current_word['state'] == 'NEW':
                                 current_word['state'] = 'NEW'
                         else:
-                            current_word['text'] = current_word['text'].replace('(CID:13)', '').replace('(CID:3)', '').strip()
-                            words.append(current_word)
+                            if current_word['text']:
+                                words.append(current_word)
                             current_word = next_w.copy()
+                            current_word['text']  = next_text
                             current_word['state'] = get_frag_state(current_word)
-                    words.append(current_word)
+
+                    if current_word['text']:
+                        words.append(current_word)
                 
                 # Regex patterns
                 p_regex = re.compile(r'\b(P[\.\-]?\d+|POSTE?\s*\d+)\b', re.I)
                 t_regex = re.compile(r'^([A-Z]{1,2}\d{1,2}[xX/ \-]\d{3,4})', re.I)
+                # Padrões que NÃO são estruturas — devem ser excluídos antes de tentar s_regex:
+                # 1. Cabos do tipo MT/BT + número + X (ex: MT3X2ANA, BT1X3X120)
+                # 2. Bitola de alumínio tipo AXnn (ex: AX24, AX35, AX70)
+                # 3. Cabos numéricos tipo NxN (ex: 3X120, 1X3X120)
+                _CABLE_STRUCT_RE = re.compile(
+                    r'^(?:(?:MT|BT)\d+[Xx]|[Aa][Xx]\d+|\d+[Xx]\d)',
+                    re.I
+                )
                 s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ET\d+[A-Z]*|BR\d+)', re.I)
                 trafo_regex = re.compile(r'(?:3\s*Ø\s*)?(\d+[,.]?\d*)\s*KVA', re.I)
 
@@ -458,8 +528,8 @@ class ProjectExtractor:
                                         norm = chunk.replace('X','/').replace(' ','').replace('-','/')
                                         pole_map[p_id]['Pole'] = norm
                                         pole_map[p_id]['IsNewContent'] = True
-                                    elif s_regex.match(chunk) and len(chunk) >= 2:
-                                        # Ignorar IDs de poste (P1, P2...) como estruturas
+                                    elif s_regex.match(chunk) and len(chunk) >= 2 and not _CABLE_STRUCT_RE.match(chunk):
+                                        # Ignorar IDs de poste (P1, P2...) e padrões de cabo como estruturas
                                         if re.match(r'^P\d+$', chunk, re.IGNORECASE):
                                             continue
                                         if chunk not in pole_map[p_id]['Est']:
@@ -471,17 +541,18 @@ class ProjectExtractor:
                             text = text.replace('DOT', ',').strip()
                             if not text: continue
                             
+                            is_est = s_regex.match(text) and not _CABLE_STRUCT_RE.match(text)
                             labeled_items.append({
                                 'text': text, 'pos': center, 'state': state,
                                 'type': 'TYPE' if t_regex.match(text) else (
                                     'TRAFO' if trafo_regex.search(text) else (
-                                        'EST' if s_regex.match(text) else None
+                                        'EST' if is_est else None
                                     )
                                 )
                             })
                             if t_regex.match(text) and len(text) > 8:
                                 for sub in re.split(r'[,; ]+', text)[1:]:
-                                    if s_regex.match(sub):
+                                    if s_regex.match(sub) and not _CABLE_STRUCT_RE.match(sub):
                                         labeled_items.append({'text': sub, 'pos': center, 'state': state, 'type': 'EST'})
 
         # Associação por Proximidade (Nearest Neighbor)
@@ -584,63 +655,108 @@ class ProjectExtractor:
         return cleaned_map
 
     def find_cables(self):
-        """Extrai cabos e suas metragens, priorizando a descrição completa."""
+        """
+        Extrai cabos e suas metragens da legenda/quadro de materiais do PDF.
+
+        Estratégia (V4):
+        1. Agrupa palavras por linha (tolerância vertical 4px — aumentada de 3px).
+        2. Filtra linhas que contenham ao menos uma keyword de cabo E uma quantidade em metros.
+        3. Regex em cascata:
+           a. Captura preferencial: "MT ..." ou "BT ..." antes da metragem.
+           b. Captura por padrão de cabo: "CABO|FIO|COND|MULTIPLEX|AL ..." antes da metragem.
+           c. Fallback genérico: qualquer descrição antes da metragem (se a linha passar no
+              filtro de keyword).
+        4. Classificação MT vs BT por palavras-chave na descrição extraída.
+        5. Deduplicação: ignora cabo já capturado com mesma desc + qtd.
+        """
         cables_found = []
-        print("--- DEBUG: INICIANDO FIND_CABLES (V3) ---")
-        
-        keywords = ["MT", "BT", "CABO", "FIO", "COND", "AL", "COBRE", "MULTIPLEX", "NU"]
-        
+        seen = set()  # deduplicação (desc_upper, qty)
+        print("--- DEBUG: INICIANDO FIND_CABLES (V4) ---")
+
+        keywords = ["MT", "BT", "CABO", "FIO", "COND", "AL", "COBRE", "MULTIPLEX", "NU", "PROTEGIDO"]
+
+        # Regex em cascata — do mais específico ao mais genérico
+        _CABLE_PATTERNS = [
+            # 1. Linha que começa com MT ou BT (ex: "MT CABO AL NU 35MM2 15KV 250 M")
+            re.compile(r'^((?:MT|BT)\b.*?)\s+([\d]{1,5}(?:[,.]\d+)?)\s*(?:M\b|METROS)\b', re.I),
+            # 2. Linha com descrição de cabo antes da metragem
+            re.compile(r'((?:CABO|FIO|COND|MULTIPLEX)\b.*?)\s+([\d]{1,5}(?:[,.]\d+)?)\s*(?:M\b|METROS)\b', re.I),
+            # 3. Qualquer palavra técnica + metragem (fallback)
+            re.compile(r'(\b(?:AL\b|COBRE\b|NU\b|PROTEG\w*\b).*?)\s+([\d]{1,5}(?:[,.]\d+)?)\s*(?:M\b|METROS)\b', re.I),
+            # 4. Genérico: captura tudo antes de "NNN M" — só se passou no filtro de keyword
+            re.compile(r'^(.+?)\s+([\d]{1,5}(?:[,.]\d+)?)\s*(?:M\b|METROS)\b', re.I),
+        ]
+
         with pdfplumber.open(self.pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 self._analyze_page_visuals(page, i)
-                
+
                 words = page.extract_words()
                 lines_data = {}
-                sorted_words_p = sorted(words, key=lambda w: w['top'])
-                
-                for w in sorted_words_p:
+                for w in sorted(words, key=lambda w: w['top']):
                     placed = False
                     for y_key in list(lines_data.keys()):
-                        if abs(w['top'] - y_key) <= 3.0:
+                        if abs(w['top'] - y_key) <= 4.0:   # tolerância aumentada de 3→4px
                             lines_data[y_key].append(w)
                             placed = True
                             break
                     if not placed:
                         lines_data[w['top']] = [w]
-                
+
                 for y in sorted(lines_data.keys()):
                     line_words = sorted(lines_data[y], key=lambda w: w['x0'])
-                    line_text = " ".join([w['text'] for w in line_words]).upper()
-                    
-                    has_keyword = any(k in line_text for k in keywords)
-                    has_meter = "M" in line_text or "METROS" in line_text
-                    
-                    if has_keyword and has_meter:
-                         match = re.search(r'((?:MT|BT).*?)\s+([\d,.]+)\s*(?:M|METROS)\b', line_text)
-                         
-                         if not match:
-                             match = re.search(r'(.*?)\s+([\d,.]+)\s*(?:M|METROS)\b', line_text)
-                             
-                         if match:
-                            desc = match.group(1).strip()
-                            raw_qty = match.group(2).replace(',', '.')
-                            try:
-                                qty = float(raw_qty)
-                                
-                                if qty > 10000:
-                                    continue
-                                
-                                if "MT" in desc or "15KV" in desc or "25KV" in desc:
-                                    tipo = 'MT'
-                                else:
-                                    tipo = 'BT'
-                                    
-                                desc_final = desc
-                                cables_found.append({'Tipo': tipo, 'Desc': desc_final, 'Qtd': qty})
-                            except Exception as e:
-                                pass
+                    line_text = " ".join([w['text'] for w in line_words]).upper().strip()
 
-        # [FIX C1] REMOVIDAS as 2 linhas duplicadas de `return cables_found`
+                    # Pré-filtro rápido
+                    has_keyword = any(k in line_text for k in keywords)
+                    has_meter   = bool(re.search(r'\d\s*(?:M\b|METROS\b)', line_text))
+                    if not (has_keyword and has_meter):
+                        continue
+
+                    # Tentar cada padrão até obter match válido
+                    matched = False
+                    for pattern in _CABLE_PATTERNS:
+                        m = pattern.search(line_text)
+                        if not m:
+                            continue
+                        desc    = m.group(1).strip()
+                        raw_qty = m.group(2).replace(',', '.')
+                        try:
+                            qty = float(raw_qty)
+                        except ValueError:
+                            continue
+
+                        # Descartar valores absurdos (coordenadas GPS, códigos, etc.)
+                        if qty <= 0 or qty > 15000:
+                            continue
+                        # Descartar descrições muito curtas (ruído)
+                        if len(desc) < 2:
+                            continue
+
+                        # Classificar MT vs BT
+                        desc_up = desc.upper()
+                        if any(k in desc_up for k in ("15KV", "25KV", "13KV", "34KV", " MT", "MT ")):
+                            tipo = 'MT'
+                        elif any(k in desc_up for k in ("0.6/1", "1KV", " BT", "BT ", "MULTIPLEX")):
+                            tipo = 'BT'
+                        elif desc_up.startswith("MT"):
+                            tipo = 'MT'
+                        else:
+                            tipo = 'BT'
+
+                        key = (desc_up, qty)
+                        if key in seen:
+                            matched = True
+                            break
+                        seen.add(key)
+                        cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
+                        matched = True
+                        break
+
+                    if not matched:
+                        print(f"[CABO] Linha ignorada (sem match): {line_text[:80]}")
+
+        print(f"--- DEBUG: FIND_CABLES encontrou {len(cables_found)} cabos ---")
         return cables_found
 
     def get_summary_structures(self, pole_map):
@@ -847,5 +963,252 @@ class ProjectExtractor:
             for item in low_conf:
                 lines.append(f"- **{item['type']}**: {item['value']} (confiança: {item['confidence']:.1%})")
             lines.append("")
-        
+
         return "\n".join(lines)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # EXTRAÇÃO VIA API ANTHROPIC (modo avançado, opt-in)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # Prompt de extração — instrui Claude a retornar JSON estruturado
+    _CLAUDE_EXTRACTION_PROMPT = """Você é um especialista em projetos elétricos de distribuição.
+Analise este diagrama técnico (desenho de engenharia elétrica) e extraia as informações dos postes e cabos.
+
+Retorne EXCLUSIVAMENTE um JSON válido, sem texto antes ou depois, no formato:
+{
+  "postes": [
+    {
+      "id": "P1",
+      "tipo": "C12/600",
+      "estruturas": ["N4F", "1S3"],
+      "trafo": null,
+      "estais": 0,
+      "chave": null
+    }
+  ],
+  "cabos": [
+    {
+      "tipo": "MT",
+      "descricao": "CABO AL NU 35MM2 15KV",
+      "metros": 250
+    }
+  ],
+  "ordem": ""
+}
+
+Regras:
+- "tipo" do poste: use o formato C{altura}/{esforco} para circulares (ex: C12/600) ou DT{altura}/{esforco} para Duplo T (ex: DT11/300)
+- "estruturas": lista de códigos de estrutura conforme o diagrama (ex: N4F, B2, U1, ET4A, 1S3, 1S4)
+- "trafo": string como "MONO-15kVA" ou "TRI-75kVA" (null se não houver)
+- "tipo" do cabo: "MT" para média tensão, "BT" para baixa tensão
+- "metros": número (apenas o valor numérico, sem unidade)
+- "ordem": número da ordem de serviço se encontrado no cabeçalho (string vazia se não encontrar)
+- Postes marcados com retângulo ou caixa indicam equipamento NOVO
+- Postes com texto tachado indicam REMOÇÃO (incluir mesmo assim mas com sufixo R ex: "C12/600(R)")
+- Se não encontrar postes ou cabos, retorne listas vazias []"""
+
+    def _normalize_ai_payload(self, data: Dict, provider: str) -> dict:
+        """Normaliza payload de IA para o formato interno da aplicação."""
+        pole_map = {}
+        for poste in data.get('postes', []):
+            p_id = str(poste.get('id', 'P?')).upper().strip()
+            tipo = str(poste.get('tipo', 'Desconhecido')).strip()
+            estruturas = [str(e).upper().strip() for e in poste.get('estruturas', []) if e]
+            trafo = poste.get('trafo') or None
+            estais = int(poste.get('estais', 0) or 0)
+            chave = poste.get('chave') or None
+
+            pole_map[p_id] = {
+                'Pole': tipo,
+                'Est': estruturas,
+                'Trafo': trafo,
+                'Estai': {'Type': 'CC - 14M', 'Qtd': estais},
+                'Chave': chave,
+                'ParaRaio': {'Type': 'CRUZETA', 'Qtd': 0},
+                'Aterramento': {'Qtd': 0},
+                'Ramal': {'Type': None, 'Qtd': 0.0},
+            }
+
+        cables = []
+        for cabo in data.get('cabos', []):
+            tipo_cabo = str(cabo.get('tipo', 'BT')).upper()
+            desc = str(cabo.get('descricao', '')).strip()
+            metros = cabo.get('metros', 0)
+            try:
+                metros = float(str(metros).replace(',', '.'))
+            except (ValueError, TypeError):
+                metros = 0.0
+            if desc and metros > 0:
+                cables.append({'Tipo': tipo_cabo, 'Desc': desc, 'Qtd': metros})
+
+        ordem = str(data.get('ordem', '')).strip()
+
+        result = {
+            'pole_map': pole_map,
+            'cables': cables,
+            'ordem': ordem,
+            'raw_ai': data,
+            'ai_provider': provider,
+        }
+        print(f"[{provider.upper()}-PDF] Extraídos: {len(pole_map)} postes, {len(cables)} cabos")
+        return result
+
+    def extract_with_ai(self, pdf_bytes: bytes, provider: str = "claude") -> dict:
+        """Despacha extração avançada para o provedor configurado."""
+        p = (provider or "").strip().lower()
+        if p == "claude":
+            return self.extract_with_claude(pdf_bytes)
+        if p == "copilot":
+            return self.extract_with_copilot(pdf_bytes)
+        raise RuntimeError(f"Provedor de IA não suportado: {provider}")
+
+    def extract_with_claude(self, pdf_bytes: bytes) -> dict:
+        """
+        Extrai postes e cabos usando a API Anthropic com suporte nativo a PDF.
+
+        Retorna dict com chaves 'pole_map' e 'cables' no mesmo formato do
+        find_structures_per_pole() e find_cables(), prontos para uso no engine.
+
+        Lança RuntimeError se a API não estiver disponível ou retornar erro.
+        """
+        try:
+            import anthropic
+        except ImportError:
+            raise RuntimeError("Biblioteca 'anthropic' não instalada. Execute: pip install anthropic")
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY não encontrada nas variáveis de ambiente.")
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        pdf_b64 = base64.standard_b64encode(pdf_bytes).decode('utf-8')
+
+        print("[CLAUDE-PDF] Enviando PDF para API Anthropic...")
+        try:
+            response = client.beta.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                betas=["pdfs-2024-09-25"],
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": self._CLAUDE_EXTRACTION_PROMPT,
+                        },
+                    ],
+                }],
+            )
+        except Exception as e:
+            raise RuntimeError(f"Erro na chamada à API Anthropic: {e}")
+
+        raw_text = response.content[0].text.strip()
+        print(f"[CLAUDE-PDF] Resposta recebida ({len(raw_text)} chars)")
+
+        # Extrair JSON mesmo que venha com markdown ```json ... ```
+        json_match = re.search(r'\{[\s\S]*\}', raw_text)
+        if not json_match:
+            raise RuntimeError(f"Claude não retornou JSON válido. Resposta: {raw_text[:300]}")
+
+        try:
+            data = json.loads(json_match.group(0))
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Falha ao parsear JSON do Claude: {e}\nJSON: {raw_text[:300]}")
+
+        return self._normalize_ai_payload(data, provider="claude")
+
+    def extract_with_copilot(self, pdf_bytes: bytes) -> dict:
+        """
+        Extrai postes e cabos via endpoint corporativo do Copilot.
+
+        Variáveis de ambiente esperadas:
+        - COPILOT_EXTRACT_WEBHOOK_URL (obrigatória)
+        - COPILOT_EXTRACT_API_KEY (opcional)
+        - COPILOT_EXTRACT_TIMEOUT_SEC (opcional, padrão 90)
+        """
+        from urllib.request import Request, urlopen
+        from urllib.error import URLError, HTTPError
+
+        webhook_url = os.environ.get("COPILOT_EXTRACT_WEBHOOK_URL", "").strip()
+        if not webhook_url:
+            raise RuntimeError(
+                "COPILOT_EXTRACT_WEBHOOK_URL não configurada. "
+                "Defina o endpoint corporativo para extração via Copilot."
+            )
+
+        api_key = os.environ.get("COPILOT_EXTRACT_API_KEY", "").strip()
+        timeout = int(os.environ.get("COPILOT_EXTRACT_TIMEOUT_SEC", "90"))
+
+        payload = {
+            "prompt": self._CLAUDE_EXTRACTION_PROMPT,
+            "pdf_base64": base64.standard_b64encode(pdf_bytes).decode("utf-8"),
+        }
+        body = json.dumps(payload).encode("utf-8")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if api_key:
+            headers["X-API-Key"] = api_key
+
+        print("[COPILOT-PDF] Enviando PDF para endpoint corporativo...")
+        req = Request(webhook_url, data=body, headers=headers, method="POST")
+
+        try:
+            with urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore")[:300]
+            raise RuntimeError(f"Erro HTTP no endpoint Copilot: {e.code} - {detail}")
+        except URLError as e:
+            raise RuntimeError(f"Falha de conexão no endpoint Copilot: {e.reason}")
+        except Exception as e:
+            raise RuntimeError(f"Erro ao chamar endpoint Copilot: {e}")
+
+        data = self._parse_copilot_response(raw)
+
+        return self._normalize_ai_payload(data, provider="copilot")
+
+    def _parse_copilot_response(self, raw: str) -> Dict:
+        """
+        Interpreta resposta do endpoint Copilot e retorna payload canônico:
+        {"postes": [...], "cabos": [...], "ordem": "..."}.
+        """
+        # Aceita payload já em JSON ou texto contendo JSON
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = {"content": raw}
+
+        if isinstance(parsed, dict) and "postes" in parsed and "cabos" in parsed:
+            return parsed
+
+        if isinstance(parsed, dict) and isinstance(parsed.get("result"), dict):
+            result = parsed["result"]
+            if "postes" in result and "cabos" in result:
+                return result
+
+        if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
+            content = parsed["content"]
+            match = re.search(r"\{[\s\S]*\}", content)
+            if not match:
+                raise RuntimeError("Copilot não retornou JSON válido em 'content'.")
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Falha ao parsear JSON do Copilot: {e}")
+            if "postes" in payload and "cabos" in payload:
+                return payload
+            raise RuntimeError("JSON de conteúdo Copilot sem chaves esperadas ('postes'/'cabos').")
+
+        raise RuntimeError("Formato de resposta do Copilot não reconhecido.")

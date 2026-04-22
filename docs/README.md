@@ -52,5 +52,10 @@ Principais arquivos e suas funções:
 
 Para manter a integridade do banco de dados ou migrar novos dados de planilhas Excel para o SQLite, utilize os scripts `migrate_to_sqlite.py` e `database_loader.py`.
 
+## 🏢 Publicação Interna (Office 365 / Teams)
+
+Guia operacional completo:
+- [PUBLICACAO_INTERNA_OFFICE365.md](C:\Users\EvandroCesarToniolo\Projetos_Antigravity\02_PROJETOS\PRJ-13-Calculadora\docs\PUBLICACAO_INTERNA_OFFICE365.md)
+
 ---
 *Desenvolvido para otimização de fluxos de engenharia elétrica.*

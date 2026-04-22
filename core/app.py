@@ -7,6 +7,7 @@ from io import BytesIO
 from extractor import ProjectExtractor
 from engine import MaterialEngine
 from final_report import PDFReport
+from validators import TechnicalValidator
 
 st.set_page_config(page_title="Calculadora de Materiais", layout="wide", initial_sidebar_state="expanded")
 
@@ -348,6 +349,12 @@ if 'poles_data' not in st.session_state:
     st.session_state.poles_data = {}
 if 'bom_df' not in st.session_state:
     st.session_state.bom_df = pd.DataFrame()
+if 'validation_summary' not in st.session_state:
+    st.session_state.validation_summary = {'total': 0, 'errors': 0, 'warnings': 0, 'infos': 0, 'issues': []}
+if 'precision_history' not in st.session_state:
+    st.session_state.precision_history = []
+if 'last_metrics_key' not in st.session_state:
+    st.session_state.last_metrics_key = ""
     
 # --- CONTROLE DE FLUXO (NOVO) ---
 if 'project_started' not in st.session_state:
@@ -387,14 +394,58 @@ def calculate_bom():
         # 3. Agrupar
         if materials:
             df = pd.DataFrame(materials)
-            df_grouped = df.groupby(['Código SAP', 'Descrição']).agg({'Quantidade': 'sum'}).reset_index()
+            # Agrupar por Código SAP: pegar a primeira descrição e somar quantidades.
+            # Agrupa só por SAP para evitar duplicatas causadas por descrições ligeiramente
+            # diferentes do mesmo material (ex: sufixo de origem diferente).
+            df_grouped = (
+                df.groupby('Código SAP', sort=False)
+                .agg(
+                    Descrição=('Descrição', 'first'),
+                    Quantidade=('Quantidade', 'sum'),
+                    Confiança=('Confiança', 'min')
+                )
+                .reset_index()
+            )
             # Ordenar por Descrição
             df_grouped = df_grouped.sort_values('Descrição')
             # Arredondar quantidades
             df_grouped['Quantidade'] = df_grouped['Quantidade'].apply(lambda x: round(x, 2))
+            if 'Confiança' in df_grouped.columns:
+                df_grouped['Confiança'] = df_grouped['Confiança'].apply(lambda x: round(float(x), 2))
             st.session_state.bom_df = df_grouped
         else:
             st.session_state.bom_df = pd.DataFrame()
+
+        # 4. Gate de qualidade: validação técnica
+        validator = TechnicalValidator()
+        extraction = {
+            'pole_map': valid_poles if 'valid_poles' in locals() else {},
+            'cables': cables_list if 'cables_list' in locals() else []
+        }
+        issues = validator.validate(extraction)
+        st.session_state.validation_summary = validator.get_summary()
+
+        # 5. Métricas de assertividade
+        bom_df = st.session_state.bom_df
+        total = len(bom_df)
+        verificar = int(bom_df['Código SAP'].astype(str).str.upper().str.startswith('VERIFICAR').sum()) if total > 0 else 0
+        sap_valid = max(0, total - verificar)
+        pct_sap_valido = round((sap_valid / total) * 100, 2) if total > 0 else 0.0
+        pct_verificar = round((verificar / total) * 100, 2) if total > 0 else 0.0
+        low_conf = int((bom_df.get('Confiança', pd.Series(dtype=float)) < 0.70).sum()) if total > 0 and 'Confiança' in bom_df.columns else 0
+
+        metrics_key = f"{total}|{sap_valid}|{verificar}|{low_conf}|{st.session_state.validation_summary.get('errors', 0)}"
+        if metrics_key != st.session_state.last_metrics_key:
+            st.session_state.precision_history.append({
+                'total_itens': total,
+                'sap_validos': sap_valid,
+                'itens_verificar': verificar,
+                'pct_sap_valido': pct_sap_valido,
+                'pct_verificar': pct_verificar,
+                'low_conf_items': low_conf,
+                'validation_errors': st.session_state.validation_summary.get('errors', 0),
+            })
+            st.session_state.last_metrics_key = metrics_key
             
     except Exception as e:
         import traceback
@@ -435,7 +486,43 @@ with st.sidebar:
         </span>
     </div>
     """, unsafe_allow_html=True)
-    
+
+    # ── Seletor: Extração Avançada via IA ────────────────────────────────────
+    import os as _os
+    ai_options = [("Padrão (pdfplumber)", "none")]
+    has_claude = bool(_os.environ.get('ANTHROPIC_API_KEY'))
+    has_copilot = bool(_os.environ.get('COPILOT_EXTRACT_WEBHOOK_URL'))
+
+    if has_claude:
+        ai_options.append(("Claude", "claude"))
+    if has_copilot:
+        ai_options.append(("Copilot", "copilot"))
+
+    if "ai_provider" not in st.session_state:
+        st.session_state.ai_provider = "none"
+
+    # Se provider salvo não estiver disponível no ambiente atual, voltar para padrão
+    available_ids = [opt[1] for opt in ai_options]
+    if st.session_state.ai_provider not in available_ids:
+        st.session_state.ai_provider = "none"
+
+    labels = [opt[0] for opt in ai_options]
+    current_label = next((label for label, pid in ai_options if pid == st.session_state.ai_provider), labels[0])
+    selected_label = st.selectbox(
+        "Extração de PDF",
+        options=labels,
+        index=labels.index(current_label),
+        help="Escolha o motor de extração: padrão posicional, Claude ou Copilot corporativo.",
+    )
+    st.session_state.ai_provider = next(pid for label, pid in ai_options if label == selected_label)
+
+    if st.session_state.ai_provider == "claude":
+        st.caption("✦ Modo IA ativo — Claude analisa o diagrama")
+    elif st.session_state.ai_provider == "copilot":
+        st.caption("✦ Modo IA ativo — Copilot (endpoint corporativo)")
+    else:
+        st.caption("⚙ Extração padrão (pdfplumber)")
+
     st.divider()
     
     # DADOS DO PROJETO (Sempre visíveis mas discretos)
@@ -613,37 +700,87 @@ if uploaded_file or st.session_state.get('last_uploaded') == "MANUAL_START":
         # Resetar info básica mantendo o layout
         st.session_state.project_data = {'Ordem': '', 'Equipe': '', 'Programador': ''}
         
+        # ── Leitura dos bytes do PDF (precisa antes de criar o tempfile) ──────
+        pdf_bytes = uploaded_file.read()
+        ai_provider = st.session_state.get('ai_provider', 'none')
+        use_ai = ai_provider in ("claude", "copilot")
+
+        spinner_msg = "✦ Analisando diagrama com IA..." if use_ai else "⚙️ Processando PDF Industrial..."
+
         # Processamento (Extração)
-        with st.spinner("⚙️ Processando PDF Industrial..."):
+        with st.spinner(spinner_msg):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(uploaded_file.read())
+                tmp.write(pdf_bytes)
                 tmp_path = tmp.name
-            
+
             try:
                 ext = ProjectExtractor(tmp_path)
                 ext.extract_text()
-                
-                # Extrair Info
+
+                # Extrair Info (sempre via pdfplumber — dados de cabeçalho texto)
                 info = ext.extract_project_info()
                 st.session_state.project_data.update(info)
-                
-                # Extrair Cabos
-                cables = ext.find_cables()
+
+                if use_ai:
+                    # ── MODO IA: Provedor selecionado lê o PDF semanticamente ─
+                    try:
+                        result = ext.extract_with_ai(pdf_bytes, provider=ai_provider)
+
+                        raw_poles = result['pole_map']
+                        cables    = result['cables']
+
+                        # Ordem de serviço extraída pelo provedor IA (se pdfplumber não achou)
+                        if result.get('ordem') and not st.session_state.project_data.get('Ordem'):
+                            st.session_state.project_data['Ordem'] = result['ordem']
+
+                        # ── Auto-detecção: se Claude retornou pouco, avisa e complementa
+                        if len(raw_poles) == 0:
+                            st.warning(
+                                "IA não identificou postes no diagrama. "
+                                "Verifique se o PDF é um diagrama de rede elétrica."
+                            )
+                        else:
+                            n_est = sum(len(p.get('Est', [])) for p in raw_poles.values())
+                            st.success(
+                                f"✦ IA ({ai_provider.upper()}) extraiu **{len(raw_poles)} postes** e "
+                                f"**{n_est} estruturas** — {len(cables)} cabo(s)"
+                            )
+
+                    except RuntimeError as ai_err:
+                        st.warning(
+                            f"Extração IA ({ai_provider.upper()}) falhou ({ai_err}). "
+                            "Usando extração padrão como fallback."
+                        )
+                        cables    = ext.find_cables()
+                        raw_poles = ext.find_structures_per_pole()
+
+                else:
+                    # ── MODO PADRÃO: pdfplumber ──────────────────────────────
+                    cables    = ext.find_cables()
+                    raw_poles = ext.find_structures_per_pole()
+
+                    # Auto-detecção de PDF pobre: oferecer modo IA na próxima tentativa
+                    _poucos_dados = len(raw_poles) < 2 and len(cables) == 0
+                    if _poucos_dados and (os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('COPILOT_EXTRACT_WEBHOOK_URL')):
+                        st.warning(
+                            "Poucos dados extraídos deste PDF. "
+                            "Ative um modo de **Extração com IA** na barra lateral e recarregue o arquivo."
+                        )
+
                 if cables:
                     st.session_state.cables_data = pd.DataFrame(cables)
-                
-                # Extrair Postes
-                raw_poles = ext.find_structures_per_pole()
+
                 st.session_state.poles_data = raw_poles
-                
+
                 # Autocalcular inicial
                 calculate_bom()
-                
+
             except Exception as e:
                 st.error(f"Erro Crítico ao ler PDF: {e}")
+                import traceback; traceback.print_exc()
             finally:
                 if os.path.exists(tmp_path): os.unlink(tmp_path)
-        
+
         st.rerun()
 
 # Se não iniciou, parar renderização aqui (Landing Page only)
@@ -809,14 +946,91 @@ if st.session_state.poles_data:
 
 with col_results:
     st.markdown("### 📝 LISTA DE MATERIAIS")
+
+    # Dashboard de assertividade (observabilidade)
+    metrics_df = st.session_state.bom_df
+    total_items = len(metrics_df)
+    verificar_count = int(metrics_df['Código SAP'].astype(str).str.upper().str.startswith('VERIFICAR').sum()) if total_items > 0 else 0
+    sap_valid_count = max(0, total_items - verificar_count)
+    pct_sap_valid = round((sap_valid_count / total_items) * 100, 2) if total_items > 0 else 0.0
+    pct_verificar = round((verificar_count / total_items) * 100, 2) if total_items > 0 else 0.0
+    low_conf_count = int((metrics_df['Confiança'] < 0.70).sum()) if total_items > 0 and 'Confiança' in metrics_df.columns else 0
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("% SAP válido", f"{pct_sap_valid}%")
+    k2.metric("% VERIFICAR", f"{pct_verificar}%")
+    k3.metric("Baixa confiança", str(low_conf_count))
+    k4.metric("Erros críticos", str(st.session_state.validation_summary.get('errors', 0)))
+
+    if st.session_state.precision_history:
+        with st.expander("📈 Histórico de Assertividade", expanded=False):
+            hist_df = pd.DataFrame(st.session_state.precision_history)
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+
+    # Gate de qualidade antes da exportação
+    val_summary = st.session_state.validation_summary or {}
+    errors = int(val_summary.get('errors', 0))
+    warnings = int(val_summary.get('warnings', 0))
+    issues = val_summary.get('issues', [])
+
+    force_override = False
+    override_reason = ""
+    low_conf_review_confirmed = True
+
+    if errors > 0 or warnings > 0:
+        with st.expander(f"🛡️ GATE DE QUALIDADE (Erros: {errors} | Avisos: {warnings})", expanded=(errors > 0)):
+            for issue in issues:
+                sev = str(issue.get('severity', 'info')).upper()
+                msg = issue.get('message', '')
+                src = issue.get('source', '')
+                sug = issue.get('suggestion', '')
+                if sev == "ERROR":
+                    st.error(f"[{sev}] {msg} ({src})")
+                elif sev == "WARNING":
+                    st.warning(f"[{sev}] {msg} ({src})")
+                else:
+                    st.info(f"[{sev}] {msg} ({src})")
+                if sug:
+                    st.caption(f"Sugestão: {sug}")
+
+        if errors > 0:
+            force_override = st.checkbox(
+                "Forçar exportação mesmo com erro crítico",
+                value=False,
+                help="Use somente em exceções operacionais com justificativa.",
+            )
+            if force_override:
+                override_reason = st.text_input(
+                    "Justificativa obrigatória (mínimo 10 caracteres)",
+                    value="",
+                    key="override_reason",
+                )
+    if low_conf_count > 0:
+        low_conf_review_confirmed = st.checkbox(
+            "Confirmo que revisei os itens de baixa confiança",
+            value=False,
+            help="Obrigatório para liberar exportação quando houver baixa confiança.",
+        )
     
     # Auditoria Zero-Loss: Exibir GAPs se houver
     engine = st.session_state.engine
     if hasattr(engine, 'audit_log') and engine.audit_log:
         with st.expander(f"⚠️ GAPS DE INTEGRIDADE ({len(engine.audit_log)})", expanded=True):
+            gap_counts = {}
             for gap in engine.audit_log:
+                gtype = gap['type']
+                gap_counts[gtype] = gap_counts.get(gtype, 0) + 1
                 st.error(f"**{gap['type']}**: {gap['item']} em {gap['source']}")
+            if gap_counts:
+                st.caption("Resumo de gaps: " + ", ".join([f"{k}: {v}" for k, v in gap_counts.items()]))
             st.caption("DICA: Adicione o termo ao `vocabulary.json` ou valide o código no `Codigos de Materiais.xlsx`.")
+
+    if not metrics_df.empty and 'Confiança' in metrics_df.columns:
+        low_conf_df = metrics_df[metrics_df['Confiança'] < 0.70]
+        if not low_conf_df.empty:
+            with st.expander(f"🔎 Itens de Baixa Confiança ({len(low_conf_df)})", expanded=False):
+                st.warning("Revise estes itens antes da exportação final.")
+                st.dataframe(low_conf_df, use_container_width=True, hide_index=True)
 
     res_container = st.container(border=True)
     with res_container:
@@ -825,6 +1039,7 @@ with col_results:
         if not df_bom.empty:
             # Resetar índice para garantir que hide_index funcione
             df_bom_display = df_bom.reset_index(drop=True)
+            original_rows = df_bom_display.copy()
             
             # Tornar a lista EDITÁVEL
             edited_bom = st.data_editor(
@@ -832,18 +1047,19 @@ with col_results:
                 column_config={
                     "Código SAP": st.column_config.TextColumn("SAP", width="small"),
                     "Descrição": st.column_config.TextColumn("Material", width="medium"),
-                    "Quantidade": st.column_config.NumberColumn("Qtd", format="%.2f")
+                    "Quantidade": st.column_config.NumberColumn("Qtd", format="%.2f"),
+                    "Confiança": st.column_config.NumberColumn("Conf", format="%.2f", width="small")
                 },
                 use_container_width=True,
                 height=600,
                 hide_index=True,
                 num_rows="dynamic",
                 key="bom_editor",
-                disabled=["Desc"] # Apenas exemplo se quiséssemos travar a descrição
+                disabled=["Confiança"]
             )
             
             # Lógica para preencher descrição automaticamente e validar quantidade
-            if not edited_bom.equals(df_bom):
+            if not edited_bom.equals(df_bom_display):
                 needs_update = False
                 error_msg = None
                 
@@ -863,6 +1079,13 @@ with col_results:
                     # B. Validação de Quantidade
                     if pd.isna(qty) or qty <= 0:
                         error_msg = f"Erro na linha {idx+1}: Quantidade deve ser superior a zero."
+
+                    # C. Persistência de correção manual
+                    if idx < len(original_rows):
+                        old_sap = str(original_rows.at[idx, 'Código SAP']).strip()
+                        old_desc = str(original_rows.at[idx, 'Descrição']).strip()
+                        if (sap and desc) and ((sap != old_sap) or (desc != old_desc)):
+                            st.session_state.engine.register_manual_correction(sap, desc, source="bom_editor")
                 
                 if error_msg:
                     st.error(error_msg)
@@ -875,29 +1098,46 @@ with col_results:
             total_itens = len(st.session_state.bom_df)
             # Removido total de peças conforme solicitado (unidades mistas causavam confusão)
             st.caption(f"**Total:** {total_itens} itens distintos")
+
+            quality_blocked = (
+                (errors > 0 and not (force_override and len(override_reason.strip()) >= 10))
+                or (low_conf_count > 0 and not low_conf_review_confirmed)
+            )
+            if errors > 0 and force_override and len(override_reason.strip()) < 10:
+                st.warning("Para forçar exportação, preencha justificativa com pelo menos 10 caracteres.")
+            if quality_blocked:
+                if errors > 0:
+                    st.error("Exportação bloqueada pelo Gate de Qualidade (erros críticos).")
+                else:
+                    st.error("Exportação bloqueada até confirmação de revisão dos itens de baixa confiança.")
+            elif errors > 0 and force_override:
+                st.warning(f"Exportação liberada por override justificado: {override_reason.strip()}")
             
             col_csv, col_pdf = st.columns(2)
             
             with col_csv:
                 # Garantir encoding utf-8-sig para Excel
-                csv_data = df_bom.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+                export_df = st.session_state.bom_df
+                csv_data = export_df.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
                     label="⬇ BAIXAR CSV",
                     data=csv_data,
                     file_name="lista_materiais_final.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    key="btn_csv_vfinal_stable"
+                    key="btn_csv_vfinal_stable",
+                    disabled=quality_blocked
                 )
             
             with col_pdf:
                 try:
                     p_data_clean = {k: str(v) if v is not None else "" for k,v in st.session_state.project_data.items()}
                     obs = st.session_state.get('observacoes', '')
+                    export_df = st.session_state.bom_df
                     
                     pdf_buffer = BytesIO()
                     pdf_gen = PDFReport(pdf_buffer)
-                    pdf_gen.generate(p_data_clean, df_bom, obs)
+                    pdf_gen.generate(p_data_clean, export_df, obs)
                     pdf_bytes = pdf_buffer.getvalue()
                     
                     # Botão NATIVO para garantir o download correto
@@ -907,7 +1147,8 @@ with col_results:
                         file_name="lista_materiais.pdf",
                         mime="application/pdf",
                         use_container_width=True,
-                        key="btn_pdf_vfinal_stable"
+                        key="btn_pdf_vfinal_stable",
+                        disabled=quality_blocked
                     )
                         
                 except Exception as e:

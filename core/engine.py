@@ -6,6 +6,7 @@ Veja: RELATORIO_INCONSISTENCIAS.md para detalhes
 import pandas as pd
 import re
 import os
+import json
 
 # Caminhos padrão (Relativos ao diretório do script)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -15,9 +16,12 @@ SAP_PATH = os.path.join(BASE_DIR, 'Codigos de Materiais Novos.xlsx')
 
 # SQLite Database Loader (substitui JSON/Pickle)
 try:
-    from database_sqlite import SQLiteDatabaseLoader as DatabaseLoader
+    from .database_sqlite import SQLiteDatabaseLoader as DatabaseLoader  # type: ignore
 except ImportError:
-    from database_loader import DatabaseLoader
+    try:
+        from database_sqlite import SQLiteDatabaseLoader as DatabaseLoader
+    except ImportError:
+        from database_loader import DatabaseLoader
 
 # Mapeamento de Diâmetros para Códigos SAP de Cintas
 CINTA_SAP_MAP = {
@@ -53,24 +57,63 @@ MANUAL_EST_MAP = {
 # Formato: 'ALIAS_NO_PDF': 'CODIGO_NO_BANCO'
 # ─────────────────────────────────────────────────────────────────────────────
 STRUCTURE_ALIASES = {
-    # Estruturas secundárias — S3/S4 são abreviações de 1S3/1S4
-    # Fonte: Norma Enel/CPFL — estrutura de ancoragem de ramal
-    'S3':   '1S3',
-    'S4':   '1S4',
-    'S3(1)':'1S3',
-    'S4(1)':'1S4',
-
-    # Hastes — H5 é alias de 1HASTE (haste de ancoragem 5/8")
-    # Fonte: Catálogo de materiais CPFL — H5 = Haste 5/8" 2.4m
-    'H5':   '1HASTE',
-    'H3':   '1HASTE',
-
-    # Estruturas de numeração alternativa observadas em projetos
+    # ── Estruturas secundárias de ramal ──────────────────────────────────────
+    # S3/S4 são abreviações de 1S3/1S4 (Norma Enel/CPFL)
+    'S3':     '1S3',
+    'S4':     '1S4',
+    'S3(1)':  '1S3',
+    'S4(1)':  '1S4',
     '1S3(1)': '1S3',
     '1S4(1)': '1S4',
+    '2S3':    '1S3',   # prefixo numérico de quantidade, não de tipo
+    '2S4':    '1S4',
 
+    # ── Hastes de aterramento ─────────────────────────────────────────────────
+    # H3/H5 = Haste 5/8" (Catálogo CPFL)
+    'H5':   '1HASTE',
+    'H3':   '1HASTE',
+    'H1':   '1HASTE',
+    'HASTE':'1HASTE',
+
+    # ── Estruturas N (neutro/passagem) — variações regionais ─────────────────
+    'N1F':  'N1',
+    'N2F':  'N2',
+    'N3F':  'N3',
+    'N4F':  'N4',
+    'N5F':  'N5',
+    'N1A':  'N1',
+    'N2A':  'N2',
+
+    # ── Estruturas B (bifurcação/derivação) ──────────────────────────────────
+    'B1F':  'B1',
+    'B2F':  'B2',
+    'B3F':  'B3',
+    'B4F':  'B4',
+
+    # ── Estruturas ET (entroncamento) ─────────────────────────────────────────
+    'ET1':  'ET1T',
+    'ET2':  'ET2T',
+    'ET3':  'ET3T',
+    'ET4':  'ET4A',
+
+    # ── Estruturas U (ultima) ─────────────────────────────────────────────────
+    'U1F':  'U1',
+    'U2F':  'U2',
+    'U3F':  'U3',
+    'U4F':  'U4',
+
+    # ── Estruturas M (montagem especial / medição) ────────────────────────────
+    'M1F':  'M1',
+    'M2F':  'M2',
+
+    # ── Abreviações de estai ──────────────────────────────────────────────────
+    'EST':   'ESTAI',
+    'ESTAI1':'ESTAI',
+
+    # ── Outros aliases comuns de campo ───────────────────────────────────────
     # Adicionar novos aliases aqui conforme novos projetos forem testados.
-    # Sempre documentar: alias, destino, fonte/norma.
+    # Formato: 'ALIAS_NO_PDF': 'CODIGO_NO_BANCO'
+    # Sempre documentar: alias → destino — fonte/norma.
 }
 
 # Ferragens de Fixação para Cintas (Poste Circular)
@@ -91,6 +134,8 @@ class MaterialEngine:
         self.db_loader = None
         self.detected_cables = {'MT': None, 'BT': None}
         self.audit_log = []
+        self.manual_corrections_path = os.path.join(BASE_DIR, "manual_corrections.json")
+        self.manual_corrections = self._load_manual_corrections()
         
         # [FIX A1] Mapeamento de Cintas ampliado com postes faltantes
         self.clamp_logic = {
@@ -159,6 +204,81 @@ class MaterialEngine:
             ('DT12/300', 'U'): [('30058234', 1), ('30050463', 2)],
             ('DT12/300', 'S'): [('30058234', 1), ('30050463', 2)],
         }
+
+    def _load_manual_corrections(self):
+        """Carrega correções manuais de SAP por descrição."""
+        if not os.path.exists(self.manual_corrections_path):
+            return {}
+        try:
+            with open(self.manual_corrections_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            print(f"[WARN] Falha ao carregar manual_corrections.json: {e}")
+        return {}
+
+    def _save_manual_corrections(self):
+        """Persiste correções manuais."""
+        try:
+            with open(self.manual_corrections_path, "w", encoding="utf-8") as f:
+                json.dump(self.manual_corrections, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARN] Falha ao salvar manual_corrections.json: {e}")
+
+    def register_manual_correction(self, sap_code: str, description: str, source: str = "ui") -> bool:
+        """Registra correção manual para reaproveitamento em próximos cálculos."""
+        sap = str(sap_code or "").strip()
+        desc = str(description or "").strip()
+        if not sap or not desc:
+            return False
+        if sap.upper().startswith("VERIFICAR"):
+            return False
+        key = desc.upper()
+        self.manual_corrections[key] = {
+            "sap": sap,
+            "descricao": desc,
+            "source": source,
+        }
+        self._save_manual_corrections()
+        return True
+
+    def _confidence_from_score(self, score):
+        """Converte score de busca em confiança normalizada (0..1)."""
+        try:
+            s = float(score)
+        except (ValueError, TypeError):
+            return 0.85
+        conf = 0.55 + (0.08 * s)
+        return max(0.40, min(0.99, round(conf, 2)))
+
+    def _apply_manual_correction(self, mat):
+        """Aplica de-para manual pela descrição quando SAP vier como VERIFICAR."""
+        sap = str(mat.get("Código SAP", "") or "").strip()
+        if sap and not sap.upper().startswith("VERIFICAR"):
+            return mat
+        desc = str(mat.get("Descrição", "") or "").strip().upper()
+        if not desc:
+            return mat
+        correction = self.manual_corrections.get(desc)
+        if correction:
+            mat["Código SAP"] = correction.get("sap", mat.get("Código SAP"))
+            mat["Descrição"] = correction.get("descricao", mat.get("Descrição"))
+            mat["Confiança"] = max(float(mat.get("Confiança", 0.2)), 0.95)
+            mat["Origem"] = f"{mat.get('Origem', '')} [CORRECAO-MANUAL]".strip()
+        return mat
+
+    def _ensure_confidence(self, mat):
+        """Garante que todo material tenha campo de confiança."""
+        if "Confiança" in mat:
+            try:
+                mat["Confiança"] = float(mat["Confiança"])
+                return mat
+            except (ValueError, TypeError):
+                pass
+        sap = str(mat.get("Código SAP", "") or "")
+        mat["Confiança"] = 0.2 if sap.upper().startswith("VERIFICAR") else 0.9
+        return mat
     
     def load_databases(self):
         """Carrega todas as bases de dados"""
@@ -463,21 +583,24 @@ class MaterialEngine:
                         'Origem': f'Cabo {tipo}',
                         'Código SAP': code,
                         'Descrição': desc_found,
-                        'Quantidade': qtd
+                        'Quantidade': qtd,
+                        'Confiança': self._confidence_from_score(score)
                     })
                 else:
                     mats.append({
                         'Origem': f'Cabo {tipo}',
                         'Código SAP': 'VERIFICAR',
                         'Descrição': desc,
-                        'Quantidade': qtd
+                        'Quantidade': qtd,
+                        'Confiança': 0.2
                     })
             else:
                 mats.append({
                     'Origem': f'Cabo {tipo}',
                     'Código SAP': 'VERIFICAR',
                     'Descrição': desc,
-                    'Quantidade': qtd
+                    'Quantidade': qtd,
+                    'Confiança': 0.2
                 })
         
         return mats
@@ -518,21 +641,24 @@ class MaterialEngine:
                         'Origem': 'Transformador',
                         'Código SAP': code,
                         'Descrição': desc,
-                        'Quantidade': 1
+                        'Quantidade': 1,
+                        'Confiança': self._confidence_from_score(score)
                     })
                 else:
                     mats.append({
                         'Origem': 'Transformador',
                         'Código SAP': 'VERIFICAR',
                         'Descrição': f'TRAFO {t_type}',
-                        'Quantidade': 1
+                        'Quantidade': 1,
+                        'Confiança': 0.2
                     })
             else:
                 mats.append({
                     'Origem': 'Transformador',
                     'Código SAP': 'VERIFICAR',
                     'Descrição': f'TRAFO {t_type}',
-                    'Quantidade': 1
+                    'Quantidade': 1,
+                    'Confiança': 0.2
                 })
         
         return mats
@@ -624,33 +750,43 @@ class MaterialEngine:
                                 'Quantidade': 1
                             })
 
-            # 3. Chave
-            # [FIX A3] TODO: Implementar busca real de chaves no banco SAP.
-            # O código hardcoded "30006789" era marcado como "Exemplo" e pode estar incorreto.
+            # 3. Chave (resolução determinística + fallback controlado)
             if data.get('Chave'):
                 chave_desc = f"CHAVE {data['Chave']}"
                 chave_sap = "VERIFICAR"
+                chave_conf = 0.2
                 
                 # Tentar resolver pelo banco de dados
                 if self.db_loader:
+                    chave_upper = str(data['Chave']).upper()
                     termos = ["CHAVE"]
-                    if "FUSIVEL" in data['Chave'].upper():
-                        termos.append("FUSIVEL")
-                    elif "FACA" in data['Chave'].upper():
-                        termos.append("FACA")
-                    elif "SECC" in data['Chave'].upper():
-                        termos.append("SECCIONADORA")
-                    
-                    results_chave = self.db_loader.find_material_by_description(termos, limit=1)
+                    if "FUSIVEL" in chave_upper:
+                        termos.extend(["FUSIVEL", "DISTRIBUICAO"])
+                    elif "FACA" in chave_upper:
+                        termos.extend(["FACA", "SECCIONADORA"])
+                    elif "SECC" in chave_upper:
+                        termos.extend(["SECCIONADORA"])
+                    elif "RELIG" in chave_upper:
+                        termos.extend(["RELIGADOR"])
+
+                    exclude_terms = ["SUPORTE", "BASE", "PARAFUSO", "CONECTOR", "CABO"]
+                    results_chave = self.db_loader.find_material_by_description(
+                        termos,
+                        limit=3,
+                        exclude_terms=exclude_terms,
+                    )
                     if results_chave:
-                        chave_sap = results_chave[0][0]
-                        chave_desc = results_chave[0][1]
+                        best = results_chave[0]
+                        chave_sap = best[0]
+                        chave_desc = best[1]
+                        chave_conf = self._confidence_from_score(best[2])
                 
                 results.append({
                     'Origem': f"Chave {p_id}", 
                     'Código SAP': chave_sap, 
                     'Descrição': chave_desc, 
-                    'Quantidade': 1
+                    'Quantidade': 1,
+                    'Confiança': chave_conf
                 })
             
             # 4. Estai
@@ -691,9 +827,7 @@ class MaterialEngine:
             if qtd_aterr > 0:
                 results.append({'Origem': f"Aterramento {p_id}", 'Código SAP': '30056366', 'Descrição': 'HASTE AT SIM AC 1020 COBR 5/8POL 2,4M', 'Quantidade': qtd_aterr})
             
-            # 6. Para-Raio
-            # [FIX A4] TODO: Implementar busca real de para-raios no banco SAP.
-            # O código "30053319" (COBERTURA) estava incorreto para para-raios.
+            # 6. Para-Raio (resolução determinística + fallback controlado)
             val_pr = data.get('ParaRaio')
             qtd_pr = 0
             tipo_pr = ""
@@ -714,15 +848,34 @@ class MaterialEngine:
                 # Tentar resolver pelo banco de dados
                 sap_pr = 'VERIFICAR'
                 desc_pr = f'CONJUNTO PARA-RAIO - {t_clean}{suffix}'
+                conf_pr = 0.2
                 
                 if self.db_loader:
-                    termos_pr = ["PARA-RAIOS", "POLIMERICO"]
-                    results_pr = self.db_loader.find_material_by_description(termos_pr, limit=1)
+                    termos_pr = ["PARA-RAIO", "POLIMERICO", "DISTRIBUICAO"]
+                    if "CRUZETA" in t_clean.upper():
+                        termos_pr.append("CRUZETA")
+                    if "ESTACAO" in t_clean.upper():
+                        termos_pr.append("ESTACAO")
+
+                    exclude_pr = ["SUPORTE", "PARAFUSO", "ARRUELA", "CABO", "CONECTOR"]
+                    results_pr = self.db_loader.find_material_by_description(
+                        termos_pr,
+                        limit=3,
+                        exclude_terms=exclude_pr,
+                    )
                     if results_pr:
-                        sap_pr = results_pr[0][0]
-                        desc_pr = results_pr[0][1] + suffix
+                        best = results_pr[0]
+                        sap_pr = best[0]
+                        desc_pr = best[1] + suffix
+                        conf_pr = self._confidence_from_score(best[2])
                 
-                results.append({'Origem': f"Para-Raio {p_id}", 'Código SAP': sap_pr, 'Descrição': desc_pr, 'Quantidade': qtd_pr})
+                results.append({
+                    'Origem': f"Para-Raio {p_id}",
+                    'Código SAP': sap_pr,
+                    'Descrição': desc_pr,
+                    'Quantidade': qtd_pr,
+                    'Confiança': conf_pr
+                })
 
             # 7. Ramal
             val_ramal = data.get('Ramal', {})
@@ -742,6 +895,8 @@ class MaterialEngine:
         """Agrega materiais por Código SAP, somando quantidades e unindo origens."""
         aggregated = {}
         for mat in materials_list:
+            mat = self._ensure_confidence(mat)
+            mat = self._apply_manual_correction(mat)
             sap = str(mat['Código SAP'])
             
             # FILTRO DE SEGURANÇA: Remover materiais desativados (Série 9)
@@ -752,6 +907,10 @@ class MaterialEngine:
             
             if key in aggregated:
                 aggregated[key]['Quantidade'] += mat['Quantidade']
+                aggregated[key]['Confiança'] = min(
+                    float(aggregated[key].get('Confiança', 1.0)),
+                    float(mat.get('Confiança', 1.0))
+                )
                 current_orig = aggregated[key]['Origem']
                 new_orig = mat['Origem']
                 if len(current_orig) < 150 and new_orig not in current_orig:
