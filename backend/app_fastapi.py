@@ -35,6 +35,19 @@ _engine_lock = threading.Lock()
 _engine: MaterialEngine | None = None
 
 
+def _clean_quantity(value: Any) -> float | int:
+    """Normaliza quantidade para evitar artefatos como 36.260000000000005."""
+    try:
+        q = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if abs(q) < 1e-9:
+        return 0
+    if abs(q - round(q)) < 1e-9:
+        return int(round(q))
+    return round(q, 3)
+
+
 def _get_engine() -> MaterialEngine:
     global _engine
     with _engine_lock:
@@ -199,6 +212,8 @@ async def calculate(payload: dict[str, Any]) -> JSONResponse:
                 .sort_values(by=["Código SAP", "Descrição"], ascending=[True, True])
             )
             bom_rows = grouped.to_dict(orient="records")
+            for row in bom_rows:
+                row["Quantidade"] = _clean_quantity(row.get("Quantidade", 0))
         else:
             bom_rows = []
 

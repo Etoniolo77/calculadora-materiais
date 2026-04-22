@@ -388,11 +388,26 @@ class ProjectExtractor:
             return pole_map
 
         def _normalize_pole_type(raw: str) -> str:
-            norm = raw.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+            txt = str(raw or "").upper()
+            # Captura apenas o primeiro token válido de tipologia.
+            m = re.search(r'(DT\d{1,2}/\d{3,4}|DI\d{1,2}/\d{3,4}|D\d{1,2}/\d{3,4}|C\d{1,2}/\d{3,4}|M\d{1,2}/\d{3,4})', txt)
+            if m:
+                txt = m.group(1)
+            norm = txt.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
             # OCR comum: "DT" lido como "DI"
             if re.match(r'^DI\d{1,2}/\d{3,4}$', norm, re.IGNORECASE):
                 norm = "DT" + norm[2:]
+            # OCR comum: "C" lido como "M" em poste circular.
+            if re.match(r'^M\d{1,2}/\d{3,4}$', norm, re.IGNORECASE):
+                norm = "C" + norm[1:]
             return norm.upper()
+
+        def _extract_pole_type(raw: str) -> str | None:
+            txt = str(raw or "").upper()
+            m = re.search(r'(DT\d{1,2}/\d{3,4}|DI\d{1,2}/\d{3,4}|D\d{1,2}/\d{3,4}|C\d{1,2}/\d{3,4}|M\d{1,2}/\d{3,4})', txt)
+            if not m:
+                return None
+            return _normalize_pole_type(m.group(1))
 
         def _is_valid_structure_token(token: str) -> bool:
             tk = str(token or "").strip().upper()
@@ -552,34 +567,40 @@ class ProjectExtractor:
                                 for chunk in re.split(r'[,;\s]+', safe_rest):
                                     chunk = chunk.replace('DOT', ',').strip()
                                     if not chunk: continue
-                                    if t_regex.match(chunk):
-                                        norm = _normalize_pole_type(chunk)
+                                    pole_token = _extract_pole_type(chunk)
+                                    if pole_token:
+                                        norm = pole_token
                                         pole_map[p_id]['Pole'] = norm
                                         pole_map[p_id]['IsNewContent'] = True
                                     elif s_regex.match(chunk) and len(chunk) >= 2 and not _CABLE_STRUCT_RE.match(chunk):
                                         # Ignorar IDs de poste (P1, P2...) e padrões de cabo como estruturas
                                         if re.match(r'^P\d+$', chunk, re.IGNORECASE):
                                             continue
-                                        if _is_valid_structure_token(chunk) and chunk not in pole_map[p_id]['Est']:
-                                            pole_map[p_id]['Est'].append(chunk)
+                                        # Suporta cadeia em um único token: 2S2(2)+1S1(R)
+                                        est_tokens = re.findall(r'(?:[A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d)', chunk.upper())
+                                        if not est_tokens:
+                                            est_tokens = [chunk]
+                                        for est_token in est_tokens:
+                                            if _is_valid_structure_token(est_token) and est_token not in pole_map[p_id]['Est']:
+                                                pole_map[p_id]['Est'].append(est_token)
                                         pole_map[p_id]['IsNewContent'] = True
                     else:
                         safe_text = re.sub(r'(\d),(\d)', r'\1DOT\2', raw_text)
-                        for text in re.split(r'[,;]+', safe_text):
+                        for text in re.split(r'[,;+]+', safe_text):
                             text = text.replace('DOT', ',').strip()
                             if not text: continue
-                            
+                            pole_token = _extract_pole_type(text)
                             is_est = s_regex.match(text) and not _CABLE_STRUCT_RE.match(text) and _is_valid_structure_token(text)
                             labeled_items.append({
                                 'text': text, 'pos': center, 'state': state,
-                                'type': 'TYPE' if t_regex.match(text) else (
+                                'type': 'TYPE' if pole_token else (
                                     'TRAFO' if trafo_regex.search(text) else (
                                         'EST' if is_est else None
                                     )
                                 )
                             })
-                            if t_regex.match(text) and len(text) > 8:
-                                for sub in re.split(r'[,; ]+', text)[1:]:
+                            if pole_token and len(text) > 8:
+                                for sub in re.split(r'[,;+ ]+', text)[1:]:
                                     if s_regex.match(sub) and not _CABLE_STRUCT_RE.match(sub) and _is_valid_structure_token(sub):
                                         labeled_items.append({'text': sub, 'pos': center, 'state': state, 'type': 'EST'})
 
@@ -606,7 +627,10 @@ class ProjectExtractor:
                 text = item['text']
                 
                 if item['type'] == 'TYPE':
-                    norm_type = _normalize_pole_type(text)
+                    extracted_type = _extract_pole_type(text)
+                    if not extracted_type:
+                        continue
+                    norm_type = extracted_type
                     current_is_new = p_data.get('IsTypeNew', False)
                     if state == 'NEW':
                         p_data['Pole'] = norm_type
