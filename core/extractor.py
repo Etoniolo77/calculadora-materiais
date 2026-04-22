@@ -9,6 +9,7 @@ import math
 import json
 import base64
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -386,6 +387,33 @@ class ProjectExtractor:
                         print(f"  [CAIXA] {p_id}: {box['pole_type']} | Est={box['estruturas']} | Trafo={box.get('trafo')}")
             return pole_map
 
+        def _normalize_pole_type(raw: str) -> str:
+            norm = raw.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+            # OCR comum: "DT" lido como "DI"
+            if re.match(r'^DI\d{1,2}/\d{3,4}$', norm, re.IGNORECASE):
+                norm = "DT" + norm[2:]
+            return norm.upper()
+
+        def _is_valid_structure_token(token: str) -> bool:
+            tk = str(token or "").strip().upper()
+            if not tk:
+                return False
+            if re.match(r'^P\d+$', tk):
+                return False
+            if tk in {"R0", "RO", "O", "0"}:
+                return False
+            if re.match(r'^ET\d{3,}$', tk):
+                return False
+            if re.match(r'^BR\d{3,5}$', tk):
+                return True
+            if re.match(r'^ET\d{1,2}[A-Z]{0,2}$', tk):
+                return True
+            if re.match(r'^[1-4]S\d$', tk):
+                return True
+            if re.match(r'^[A-Z]{1,2}\d{1,2}[A-Z]{0,2}$', tk):
+                return True
+            return False
+
         with pdfplumber.open(self.pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 rect_zones, lines = self._analyze_page_visuals(page, i)
@@ -525,14 +553,14 @@ class ProjectExtractor:
                                     chunk = chunk.replace('DOT', ',').strip()
                                     if not chunk: continue
                                     if t_regex.match(chunk):
-                                        norm = chunk.replace('X','/').replace(' ','').replace('-','/')
+                                        norm = _normalize_pole_type(chunk)
                                         pole_map[p_id]['Pole'] = norm
                                         pole_map[p_id]['IsNewContent'] = True
                                     elif s_regex.match(chunk) and len(chunk) >= 2 and not _CABLE_STRUCT_RE.match(chunk):
                                         # Ignorar IDs de poste (P1, P2...) e padrões de cabo como estruturas
                                         if re.match(r'^P\d+$', chunk, re.IGNORECASE):
                                             continue
-                                        if chunk not in pole_map[p_id]['Est']:
+                                        if _is_valid_structure_token(chunk) and chunk not in pole_map[p_id]['Est']:
                                             pole_map[p_id]['Est'].append(chunk)
                                         pole_map[p_id]['IsNewContent'] = True
                     else:
@@ -541,7 +569,7 @@ class ProjectExtractor:
                             text = text.replace('DOT', ',').strip()
                             if not text: continue
                             
-                            is_est = s_regex.match(text) and not _CABLE_STRUCT_RE.match(text)
+                            is_est = s_regex.match(text) and not _CABLE_STRUCT_RE.match(text) and _is_valid_structure_token(text)
                             labeled_items.append({
                                 'text': text, 'pos': center, 'state': state,
                                 'type': 'TYPE' if t_regex.match(text) else (
@@ -552,7 +580,7 @@ class ProjectExtractor:
                             })
                             if t_regex.match(text) and len(text) > 8:
                                 for sub in re.split(r'[,; ]+', text)[1:]:
-                                    if s_regex.match(sub) and not _CABLE_STRUCT_RE.match(sub):
+                                    if s_regex.match(sub) and not _CABLE_STRUCT_RE.match(sub) and _is_valid_structure_token(sub):
                                         labeled_items.append({'text': sub, 'pos': center, 'state': state, 'type': 'EST'})
 
         # Associação por Proximidade (Nearest Neighbor)
@@ -578,7 +606,7 @@ class ProjectExtractor:
                 text = item['text']
                 
                 if item['type'] == 'TYPE':
-                    norm_type = text.replace('X', '/').replace('x', '/').replace(' ', '').replace('-', '/')
+                    norm_type = _normalize_pole_type(text)
                     current_is_new = p_data.get('IsTypeNew', False)
                     if state == 'NEW':
                         p_data['Pole'] = norm_type
@@ -597,6 +625,8 @@ class ProjectExtractor:
                     for est_code in (est_matches if est_matches else [text]):
                         # Ignorar IDs de poste (P1, P2, P10...) na lista de estruturas
                         if re.match(r'^P\d+$', est_code, re.IGNORECASE):
+                            continue
+                        if not _is_valid_structure_token(est_code):
                             continue
                         norm_text = self.normalize_term(est_code)
                         # Aceitar NEW e EXISTING (modo permissivo aplicado na limpeza final)
@@ -651,6 +681,34 @@ class ProjectExtractor:
                     if k in data: del data[k]
 
                 cleaned_map[p_id] = data
+
+        # Fallback de inferência por caixas: quando o modo com P_ID explícito deixa
+        # postes sem tipologia, usa o tipo dominante detectado por boxes.
+        if has_explicit_pids and cleaned_map:
+            unknown_ids = [pid for pid, d in cleaned_map.items() if d.get('Pole', 'Desconhecido') == 'Desconhecido']
+            if unknown_ids:
+                box_poles = []
+                with pdfplumber.open(self.pdf_path) as pdf:
+                    for i, page in enumerate(pdf.pages):
+                        box_poles.extend(self._find_poles_from_boxes(page, i))
+
+                typed_boxes = [b for b in box_poles if str(b.get('pole_type', '')).strip() and b.get('pole_type') != 'Desconhecido']
+                if typed_boxes:
+                    counts = Counter([b['pole_type'] for b in typed_boxes])
+                    dominant_type, dominant_count = counts.most_common(1)[0]
+                    dominant_ratio = dominant_count / max(1, len(typed_boxes))
+
+                    if dominant_ratio >= 0.6:
+                        dominant_structs = []
+                        for b in typed_boxes:
+                            if b['pole_type'] == dominant_type and b.get('estruturas'):
+                                dominant_structs = list(b['estruturas'])
+                                break
+
+                        for pid in unknown_ids:
+                            cleaned_map[pid]['Pole'] = dominant_type
+                            if not cleaned_map[pid].get('Est') and dominant_structs:
+                                cleaned_map[pid]['Est'] = dominant_structs.copy()
 
         return cleaned_map
 
