@@ -205,6 +205,34 @@ class MaterialEngine:
             ('DT12/300', 'S'): [('30058234', 1), ('30050463', 2)],
         }
 
+    def _normalize_pole_type(self, pole_type: str) -> str:
+        """
+        Normaliza tipologia de poste para reduzir ruído de OCR/entrada.
+        Exemplos:
+        - DI10/300 -> DT10/300
+        - M11/300  -> C11/300
+        """
+        raw = str(pole_type or "").upper().strip()
+        if not raw:
+            return raw
+        norm = raw.replace("X", "/").replace(" ", "")
+
+        # Quando houver sufixos misturados (ex.: C09/600,2S2(2)/FL), captura
+        # apenas o primeiro token que representa tipologia de poste.
+        m = re.search(r'(DT\d{1,2}/\d{3,4}|D\d{1,2}/\d{3,4}|C\d{1,2}/\d{3,4}|M\d{1,2}/\d{3,4}|DI\d{1,2}/\d{3,4})', norm)
+        if m:
+            norm = m.group(1)
+
+        # OCR comum: DI ao invés de DT
+        if re.match(r"^DI\d{1,2}/\d{3,4}$", norm):
+            norm = "DT" + norm[2:]
+
+        # OCR comum: M ao invés de C para circular
+        if re.match(r"^M\d{1,2}/\d{3,4}$", norm):
+            norm = "C" + norm[1:]
+
+        return norm
+
     def _load_manual_corrections(self):
         """Carrega correções manuais de SAP por descrição."""
         if not os.path.exists(self.manual_corrections_path):
@@ -302,6 +330,10 @@ class MaterialEngine:
         if m:
             length_mm = m.group(1)
         if not length_mm:
+            m = re.search(r'PARAF\w*\s+(\d{2,4})\s*MM', desc_up)
+            if m:
+                length_mm = m.group(1)
+        if not length_mm:
             m = re.search(r'16\s*MM.*?(\d{2,4})\s*MM', desc_up)
             if m:
                 length_mm = m.group(1)
@@ -314,7 +346,15 @@ class MaterialEngine:
         if not length_mm:
             return code, desc
 
-        terms = ["PARAFUSO", "16MM", f"{length_mm}MM"]
+        # Quando o cadastro vier sem bitola explícita (ex.: "PARAFUSO 400mm"),
+        # assumimos M16 para estruturas de rede de distribuição.
+        bitola_mm = "16MM"
+        if re.search(r'\b12\s*MM\b', desc_up):
+            bitola_mm = "12MM"
+        elif re.search(r'\b10\s*MM\b', desc_up):
+            bitola_mm = "10MM"
+
+        terms = ["PARAFUSO", bitola_mm, f"{length_mm}MM"]
 
         # Refina tipo do parafuso quando a descrição já trouxer pista.
         if "FRANCES" in desc_up:
@@ -340,7 +380,7 @@ class MaterialEngine:
         filtered = []
         for sap, sap_desc, score in candidates:
             d = str(sap_desc).upper()
-            if "16MM" not in d or f"{length_mm}MM" not in d:
+            if bitola_mm not in d or f"{length_mm}MM" not in d:
                 continue
             ac_bonus = 1 if " AC" in d else 0
             family_bonus = 1 if str(sap).startswith("30058") else 0
@@ -433,7 +473,7 @@ class MaterialEngine:
     def resolve_clamps(self, pole_type, structures, p_id=""):
         """Retorna as braçadeiras E materiais das estruturas baseado no poste e estruturas."""
         mats = []
-        p_type = str(pole_type).upper()
+        p_type = self._normalize_pole_type(str(pole_type).upper())
         p_type_norm = p_type.replace('x', '/').replace(' ', '')
         p_id_label = p_id if p_id else p_type_norm
         est_cats_with_clamp_logic = set()
@@ -473,6 +513,29 @@ class MaterialEngine:
             est_cat = _get_est_cat(est)
             
             lookup = (p_type_norm.split('(')[0], est_cat)
+            if lookup not in self.clamp_logic:
+                # Fallback por similaridade para postes circulares fora do mapa (ex.: C09/600).
+                m = re.match(r'^C(\d{1,2})/(\d{3,4})$', lookup[0])
+                if m:
+                    altura = int(m.group(1))
+                    esforco = int(m.group(2))
+                    candidates = []
+                    for (pt_key, cat_key), mats_key in self.clamp_logic.items():
+                        if cat_key != est_cat:
+                            continue
+                        m2 = re.match(r'^C(\d{1,2})/(\d{3,4})$', pt_key)
+                        if not m2:
+                            continue
+                        h2 = int(m2.group(1))
+                        e2 = int(m2.group(2))
+                        # prioriza mesmo esforço; depois altura mais próxima
+                        score = (0 if e2 == esforco else 1, abs(h2 - altura))
+                        candidates.append((score, pt_key))
+                    if candidates:
+                        candidates.sort(key=lambda x: x[0])
+                        best_key = candidates[0][1]
+                        lookup = (best_key, est_cat)
+
             if lookup in self.clamp_logic:
                 est_cats_with_clamp_logic.add(est_cat)
                 for sap, qty in self.clamp_logic[lookup]:
@@ -797,10 +860,33 @@ class MaterialEngine:
         """
         self.audit_log = []
         results = []
+
+        # 0. Pré-normalização de tipologia e fallback para postes "Desconhecido"
+        # usando o tipo dominante já identificado no mesmo projeto.
+        normalized_types = {}
+        known_types = []
+        for p_id, data in pole_map.items():
+            p_norm = self._normalize_pole_type(data.get('Pole', 'Desconhecido'))
+            normalized_types[p_id] = p_norm
+            if p_norm and p_norm != "DESCONHECIDO":
+                known_types.append(p_norm)
+
+        dominant_type = None
+        if known_types:
+            counts = pd.Series(known_types).value_counts()
+            if not counts.empty:
+                top_type = str(counts.index[0])
+                top_ratio = float(counts.iloc[0]) / float(len(known_types))
+                if top_ratio >= 0.6:
+                    dominant_type = top_type
         
         for p_id, data in pole_map.items():
             # 1. Poste e Estruturas
-            clamp_mats = self.resolve_clamps(data['Pole'], data['Est'], p_id=p_id)
+            pole_type = normalized_types.get(p_id, self._normalize_pole_type(data.get('Pole', 'Desconhecido')))
+            if (not pole_type or pole_type == "DESCONHECIDO") and dominant_type:
+                pole_type = dominant_type
+
+            clamp_mats = self.resolve_clamps(pole_type, data['Est'], p_id=p_id)
             results.extend(clamp_mats)
             
             # 2. Transformador
@@ -834,7 +920,7 @@ class MaterialEngine:
                             })
                         
                         # Injetar Suporte de Trafo para Postes Circulares
-                        if "C" in str(data['Pole']).upper():
+                        if "C" in str(pole_type).upper():
                             results.append({
                                 'Origem': f"Suporte Trafo {p_id}",
                                 'Código SAP': TRAFO_SUPPORT_TRI,
