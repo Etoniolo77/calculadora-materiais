@@ -34,6 +34,7 @@ Principais pastas e arquivos:
 - `core/extractor.py`: leitura e interpretação dos PDFs.
 - `core/database_sqlite.py`: acesso ao banco oficial.
 - `data/materials.db`: banco SQLite oficial.
+- `backend_runtime/`: backend compilado para distribuição interna sem fontes Python principais.
 - `data/unified_db.json`: base consolidada oficial.
 - `data/vocabulary.json`: vocabulário técnico oficial.
 - `storage/manual_corrections.json`: aprendizado operacional e correções manuais.

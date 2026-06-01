@@ -6,7 +6,7 @@ O GitHub fica restrito ao desenvolvimento e versionamento do código. Usuários 
 
 Para distribuir para colaboradores, publique apenas o pacote gerado em SharePoint, Teams ou pasta de rede com permissão corporativa. Isso evita expor o repositório inteiro para quem só precisa usar a aplicação.
 
-> Observação de propriedade intelectual: o pacote atual ainda contém arquivos Python necessários ao runtime local. Para proteção mais forte, o próximo nível é gerar executável com PyInstaller/Nuitka. Mesmo assim, para 10 usuários internos, SharePoint/Teams privado já elimina o principal risco: acesso amplo ao repositório.
+O pacote padrão é compilado: o backend roda por `backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe` e não inclui as pastas-fonte `backend/` e `core/`.
 
 ## 1) Instalação no notebook do colaborador
 
@@ -19,7 +19,9 @@ No pacote entregue ao usuário final:
 
 ### Observação importante (máquina sem Python)
 
-Na primeira abertura, o app tenta instalar Python automaticamente nesta ordem:
+Quando o pacote compilado está presente, Python local não é necessário para iniciar o backend.
+
+No modo fonte, usado apenas para desenvolvimento/fallback, a primeira abertura tenta instalar Python automaticamente nesta ordem:
 
 1. `winget`
 2. instalador local em `scripts/bootstrap/python-installer.exe` (se existir no pacote)
@@ -58,7 +60,20 @@ Editar `app_version.json`:
 }
 ```
 
-### 3.2 Gerar pacote zip e manifesto privado
+### 3.2 Gerar executável do backend
+
+No PRJ-13:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\scripts\build_backend_exe.ps1 -Clean
+```
+
+Saída esperada:
+
+- `backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe`
+
+### 3.3 Gerar pacote zip e manifesto privado
 
 No PRJ-13:
 
@@ -71,7 +86,15 @@ Saída esperada:
 - `dist\CalculadoraMateriais-1.0.1.zip`
 - `dist\update_manifest.json`
 
-### 3.3 Publicar pacote privado
+Por padrão, se `backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe` existir, o pacote é compilado e não inclui `backend/` nem `core/`.
+
+Para gerar pacote com fontes, apenas em desenvolvimento:
+
+```powershell
+.\scripts\package_release.ps1 -SourcePackage
+```
+
+### 3.4 Publicar pacote privado
 
 1. Enviar `CalculadoraMateriais-1.0.1.zip` e `update_manifest.json` para SharePoint, Teams ou pasta de rede.
 2. Garantir que `update/update_config.json` esteja preenchido com o caminho do manifesto:
@@ -96,6 +119,7 @@ Também funciona com caminho de rede/local:
    - `archive\updates\backup-pre-update-YYYYMMDD-HHMMSS.zip`
 2. O backend é encerrado antes da cópia dos novos arquivos.
 3. Se a versão remota for igual ou menor, o update não aplica (exceto com `-Force`).
+4. O pacote compilado reduz exposição de propriedade intelectual, mas não substitui controle de acesso no SharePoint/Teams/pasta de rede.
 
 ## 5) Comandos úteis
 

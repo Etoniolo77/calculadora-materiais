@@ -24,7 +24,13 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def _resolve_project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parents[2]
+    return Path(__file__).resolve().parents[1]
+
+
+PROJECT_ROOT = _resolve_project_root()
 CORE_DIR = PROJECT_ROOT / "core"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 

@@ -15,11 +15,17 @@ $storageDir = Join-Path $ProjectRoot "storage"
 $pidFile = Join-Path $storageDir "fastapi.pid"
 $outLog = Join-Path $storageDir "fastapi.out.log"
 $errLog = Join-Path $storageDir "fastapi.err.log"
+$backendExe = Join-Path $ProjectRoot "backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe"
 
 if (-not (Test-Path $storageDir)) { New-Item -ItemType Directory -Path $storageDir | Out-Null }
 
-$pythonExe = $venvPython
-if ($UseSystemPython -or -not (Test-Path $venvPython)) {
+$usePackagedBackend = (Test-Path $backendExe) -and (-not $UseSystemPython)
+
+if ($usePackagedBackend) {
+    Write-Host "[START] Usando backend empacotado: $backendExe"
+} else {
+    $pythonExe = $venvPython
+    if ($UseSystemPython -or -not (Test-Path $venvPython)) {
     $pythonCandidates = @()
     if ($PythonCmd) { $pythonCandidates += $PythonCmd }
     $pythonCandidates += @("py", "python", "python3")
@@ -44,10 +50,11 @@ if ($UseSystemPython -or -not (Test-Path $venvPython)) {
     if ($LASTEXITCODE -ne 0 -or -not $resolved) {
         throw "Falha ao localizar Python global. Instale Python 3.x e marque 'Add Python to PATH'."
     }
-    $pythonExe = $resolved.Trim()
-    Write-Host "[START] Usando Python global: $pythonExe"
-} else {
-    Write-Host "[START] Usando Python da venv: $pythonExe"
+        $pythonExe = $resolved.Trim()
+        Write-Host "[START] Usando Python global: $pythonExe"
+    } else {
+        Write-Host "[START] Usando Python da venv: $pythonExe"
+    }
 }
 
 # Evita instancias duplicadas do backend na mesma porta.
@@ -63,6 +70,18 @@ foreach ($procInfo in $running) {
     }
 }
 
+$exePattern = "CalculadoraMateriaisBackend.exe --host $BindAddress --port $Port"
+$runningExe = Get-CimInstance Win32_Process |
+Where-Object { $_.Name -eq "CalculadoraMateriaisBackend.exe" -and $_.CommandLine -like "*$exePattern*" }
+foreach ($procInfo in $runningExe) {
+    try {
+        Stop-Process -Id $procInfo.ProcessId -Force -ErrorAction Stop
+        Write-Host "[START] Instancia empacotada antiga encerrada (PID $($procInfo.ProcessId))."
+    } catch {
+        Write-Host "[START] Aviso: nao foi possivel encerrar PID $($procInfo.ProcessId)."
+    }
+}
+
 if (Test-Path $pidFile) {
     $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
@@ -72,13 +91,17 @@ if (Test-Path $pidFile) {
     }
 }
 
-$uvicornArgs = @(
-    "-m", "uvicorn", "backend.app_fastapi:app",
-    "--host", $BindAddress,
-    "--port", "$Port"
-)
-
-$proc = Start-Process -FilePath $pythonExe -ArgumentList $uvicornArgs -WorkingDirectory $ProjectRoot -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+if ($usePackagedBackend) {
+    $backendArgs = @("--host", $BindAddress, "--port", "$Port")
+    $proc = Start-Process -FilePath $backendExe -ArgumentList $backendArgs -WorkingDirectory $ProjectRoot -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+} else {
+    $uvicornArgs = @(
+        "-m", "uvicorn", "backend.app_fastapi:app",
+        "--host", $BindAddress,
+        "--port", "$Port"
+    )
+    $proc = Start-Process -FilePath $pythonExe -ArgumentList $uvicornArgs -WorkingDirectory $ProjectRoot -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+}
 $proc.Id | Set-Content -Path $pidFile -Encoding ASCII
 
 Write-Host "[START] FastAPI iniciada."

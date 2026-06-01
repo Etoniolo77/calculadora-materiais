@@ -11,6 +11,7 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $startScript = Join-Path $PSScriptRoot "start_internal_fastapi.ps1"
 $healthScript = Join-Path $PSScriptRoot "healthcheck_internal_fastapi.ps1"
 $ensurePythonScript = Join-Path $PSScriptRoot "ensure_python_runtime.ps1"
+$backendExe = Join-Path $projectRoot "backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe"
 $cacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $url = "http://$BindAddress`:$Port/auth/logout?v=$cacheBust"
 $startupLog = Join-Path $projectRoot "storage\startup.log"
@@ -39,12 +40,16 @@ try {
     if (-not (Test-Path $healthScript)) {
         throw "Script de healthcheck nao encontrado: $healthScript"
     }
-    if (-not (Test-Path $ensurePythonScript)) {
+    if ((-not (Test-Path $backendExe)) -and (-not (Test-Path $ensurePythonScript))) {
         throw "Script de bootstrap Python nao encontrado: $ensurePythonScript"
     }
 
-    Write-Host "[0/3] Verificando runtime Python..."
-    & $ensurePythonScript -ProjectRoot $projectRoot | Out-Host
+    if (Test-Path $backendExe) {
+        Write-Host "[0/3] Backend empacotado detectado. Python local nao e necessario."
+    } else {
+        Write-Host "[0/3] Verificando runtime Python..."
+        & $ensurePythonScript -ProjectRoot $projectRoot | Out-Host
+    }
 
     Write-Host "[1/3] Iniciando backend FastAPI..."
     try {

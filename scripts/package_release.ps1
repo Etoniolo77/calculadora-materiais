@@ -1,7 +1,8 @@
 param(
     [string]$Version = "",
     [string]$PackageUrl = "",
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [switch]$SourcePackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +42,16 @@ if (Test-Path $stageRoot) {
 }
 New-Item -ItemType Directory -Path $stageRoot | Out-Null
 
-$runtimeDirs = @("backend", "core", "data", "frontend", "scripts", "update", "auth")
+$compiledBackend = Join-Path $projectRoot "backend_runtime\CalculadoraMateriaisBackend\CalculadoraMateriaisBackend.exe"
+$compiledPackage = $false
+if ((-not $SourcePackage) -and (Test-Path $compiledBackend)) {
+    $compiledPackage = $true
+    $runtimeDirs = @("backend_runtime", "data", "frontend", "update", "auth")
+    Write-Host "[PACKAGE] Modo compilado: backend/core Python nao serao incluidos no pacote."
+} else {
+    $runtimeDirs = @("backend", "core", "data", "frontend", "scripts", "update", "auth")
+    Write-Host "[PACKAGE] Modo fonte: backend/core Python serao incluidos no pacote."
+}
 $runtimeFiles = @("INICIAR_APP.cmd", "INSTALAR_APP.cmd", "app_version.json", "vocabulary.json", "pytest.ini")
 
 foreach ($dir in $runtimeDirs) {
@@ -60,6 +70,25 @@ foreach ($file in $runtimeFiles) {
     $source = Join-Path $projectRoot $file
     if (Test-Path $source) {
         Copy-Item -Path $source -Destination (Join-Path $stageRoot $file) -Force
+    }
+}
+
+if ($compiledPackage) {
+    $scriptDestination = Join-Path $stageRoot "scripts"
+    New-Item -ItemType Directory -Path $scriptDestination -Force | Out-Null
+    $runtimeScripts = @(
+        "iniciar_app.ps1",
+        "install_app_local.ps1",
+        "start_internal_fastapi.ps1",
+        "stop_internal_fastapi.ps1",
+        "healthcheck_internal_fastapi.ps1",
+        "update_app.ps1"
+    )
+    foreach ($script in $runtimeScripts) {
+        $source = Join-Path $projectRoot "scripts\$script"
+        if (Test-Path $source) {
+            Copy-Item -Path $source -Destination (Join-Path $scriptDestination $script) -Force
+        }
     }
 }
 

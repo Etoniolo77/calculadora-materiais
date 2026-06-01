@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parents[2]
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = PROJECT_ROOT / "core"
 BACKEND_DIR = PROJECT_ROOT / "backend"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
