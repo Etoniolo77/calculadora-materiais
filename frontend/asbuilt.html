@@ -1,22 +1,20 @@
 <!doctype html>
 <html lang="pt-BR">
-
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Calculadora de Materiais - FastAPI</title>
+  <title>Calculadora de Materiais - As-built</title>
   <link rel="stylesheet" href="/frontend/styles.css?v=__APP_VERSION__" />
 </head>
-
-<body data-app-mode="programacao">
+<body data-app-mode="asbuilt">
   <main class="container">
     <header class="appHeader">
       <div>
-        <h1>Calculadora de Materiais</h1>
+        <h1>Calculadora de Materiais - As-built</h1>
         <p id="appVersionInfo" class="subtitle">Versao __APP_VERSION__ | Autor: Evandro C. Toniolo</p>
       </div>
       <div class="headerActions">
-        <button id="btnGoAsBuilt" type="button" class="btnSecondary">As-built</button>
+        <button id="btnGoProgramacao" type="button" class="btnSecondary">Programacao</button>
         <button id="btnCheckUpdate" type="button" class="btnSecondary">Buscar Atualizacao</button>
         <button id="btnApplyUpdate" type="button" class="btnSecondary" disabled>Atualizar Agora</button>
       </div>
@@ -24,20 +22,11 @@
     <p id="updateStatus" class="status"></p>
 
     <section class="card">
-      <h2>1. Extracao do PDF</h2>
-      <div class="row">
-        <input id="pdfFile" type="file" accept=".pdf" />
-        <button id="btnExtract">Extrair</button>
-      </div>
-      <p id="extractStatus" class="status"></p>
-    </section>
-
-    <section class="card">
-      <h2>2. Dados do Projeto</h2>
+      <h2>1. Dados do Projeto</h2>
       <div class="grid3">
         <label>Ordem<input id="ordem" type="text" /></label>
         <label>Equipe<input id="equipe" type="text" /></label>
-        <label>Programador<input id="programador" type="text" /></label>
+        <label>Fiscal<input id="fiscal" type="text" /></label>
       </div>
       <label>Observacoes
         <textarea id="observacoes" rows="3" placeholder="Observacoes para o relatorio PDF"></textarea>
@@ -45,7 +34,7 @@
     </section>
 
     <section class="card">
-      <h2>3. Postes (edicao assistida)</h2>
+      <h2>2. Postes (edicao assistida)</h2>
       <div class="row">
         <button id="btnAddPole" type="button">Adicionar Poste</button>
       </div>
@@ -69,7 +58,7 @@
     </section>
 
     <section class="card">
-      <h2>4. Cabos (edicao assistida)</h2>
+      <h2>3. Cabos (edicao assistida)</h2>
       <div class="row">
         <button id="btnAddCable" type="button">Adicionar Cabo</button>
       </div>
@@ -89,7 +78,7 @@
     </section>
 
     <section class="card">
-      <h2>5. Calculo</h2>
+      <h2>4. Calculo</h2>
       <div class="row">
         <button id="btnCalculate">Calcular BOM</button>
         <button id="btnDownloadCsv" disabled>Baixar CSV</button>
@@ -97,7 +86,6 @@
       </div>
       <p id="calcStatus" class="status"></p>
       <div id="validationBox"></div>
-      <div id="structureAuditBox"></div>
       <div id="qualityGateBox"></div>
       <div id="recommendationsBox"></div>
       <div class="tableWrap">
@@ -107,35 +95,14 @@
               <th>Codigo SAP</th>
               <th>Descricao</th>
               <th>Quantidade</th>
+              <th>Confianca</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
-      <div class="groupedViewBox">
-        <div class="groupedViewHeader">
-          <h3>Conferencia Agrupada por Poste</h3>
-          <div class="groupedViewControls">
-            <label for="bomPoleSelect">Poste</label>
-            <select id="bomPoleSelect"></select>
-          </div>
-        </div>
-        <div class="tableWrap">
-          <table id="bomPoleTable">
-            <thead>
-              <tr>
-                <th>Codigo SAP</th>
-                <th>Descricao</th>
-                <th>Quantidade</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
     </section>
   </main>
   <script src="/frontend/app.js?v=__APP_VERSION__"></script>
 </body>
-
 </html>

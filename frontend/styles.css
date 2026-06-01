@@ -20,8 +20,22 @@ h1 {
   font-size: 28px;
 }
 
+.appHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .subtitle {
-  margin-top: 6px;
+  margin-top: 4px;
   color: #4b5563;
 }
 
@@ -60,6 +74,7 @@ label {
 
 input[type="text"],
 input[type="file"],
+select,
 textarea {
   width: 100%;
   margin-top: 4px;
@@ -82,6 +97,15 @@ td input {
   font-size: 12px;
 }
 
+td select {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 12px;
+  background: #fff;
+}
+
 button {
   border: 1px solid #0f766e;
   background: #0f766e;
@@ -90,6 +114,29 @@ button {
   padding: 9px 14px;
   cursor: pointer;
   font-weight: 600;
+}
+
+.btnSecondary {
+  border-color: #64748b;
+  background: #64748b;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+.btnSecondary:hover {
+  border-color: #475569;
+  background: #475569;
+}
+
+.modeLink,
+.modeLink:link,
+.modeLink:visited,
+.modeLink:hover,
+.modeLink:active {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  color: #fff;
 }
 
 button:disabled {
@@ -152,7 +199,300 @@ th {
   color: #374151;
 }
 
+#qualityGateBox {
+  margin-top: 10px;
+}
+
+#structureAuditBox {
+  margin-top: 10px;
+}
+
+#recommendationsBox {
+  margin-top: 10px;
+}
+
+.structure-audit-panel {
+  background: #f8fafc;
+}
+
+.audit-poles-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-pole-card {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fff;
+}
+
+.audit-pole-card.ok {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.audit-pole-card.err {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.audit-pole-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.audit-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+}
+
+.audit-badge.ok {
+  color: #166534;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.audit-badge.err {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.audit-detail-list {
+  display: grid;
+  gap: 6px;
+}
+
+.audit-detail-row {
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+}
+
+.audit-detail-row.err {
+  border-color: #fca5a5;
+}
+
+.audit-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.audit-structure {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.audit-canonical {
+  color: #475569;
+}
+
+.audit-reason {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #7f1d1d;
+}
+
+.audit-missing-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.audit-empty {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.panel {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.metrics-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.metric-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+}
+
+.metric-chip.ok {
+  color: #166534;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.metric-chip.warn {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.metric-chip.err {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.issue-list,
+.low-conf-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.issue-list li,
+.low-conf-list li {
+  margin: 4px 0;
+}
+
+.gate-alert {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+}
+
+.gate-alert.err {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.gate-alert.ok {
+  color: #166534;
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.gate-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gate-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.gate-check input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.gate-check label {
+  margin: 0;
+}
+
+.gate-controls textarea {
+  min-height: 80px;
+}
+
+.rec-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+  margin-bottom: 4px;
+}
+
+.groupedViewBox {
+  margin-top: 14px;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 12px;
+}
+
+.groupedViewHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.groupedViewHeader h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.groupedViewControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groupedViewControls label {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rec-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.rec-list li {
+  margin: 3px 0;
+}
+
+.rec-alta {
+  color: #b91c1c;
+}
+
+.rec-media {
+  color: #92400e;
+}
+
+.rec-baixa {
+  color: #166534;
+}
+
 @media (max-width: 800px) {
+  .appHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .headerActions {
+    justify-content: flex-start;
+  }
+
   .grid3 {
     grid-template-columns: 1fr;
   }

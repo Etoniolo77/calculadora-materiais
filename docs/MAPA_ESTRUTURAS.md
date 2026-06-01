@@ -1827,13 +1827,17 @@ Utilizado pelo motor de cálculo (`engine.py`) para a explosão de materiais.
 
 | SAP | Descrição Material | Qtd |
 | :--- | :--- | :--- |
-| `VERIFICAR` | VERIFICAR ESTRUTURA S3 | 1.0 |
+| `10002167` | ISOLADOR ROLDANA 76X79MM | 1.0 |
+| `10004454` | ARMACAO SECUNDARIA 1X3 | 1.0 |
+| `VERIFICAR-POSTE` | PARAFUSO M16 x 250MM AC (verificar diametro poste) | 1.0 |
 
 ### 🔹 S4
 
 | SAP | Descrição Material | Qtd |
 | :--- | :--- | :--- |
-| `VERIFICAR` | VERIFICAR ESTRUTURA S4 | 1.0 |
+| `10002167` | ISOLADOR ROLDANA 76X79MM | 1.0 |
+| `10004454` | ARMACAO SECUNDARIA 1X4 | 1.0 |
+| `VERIFICAR-POSTE` | PARAFUSO M16 x 250MM AC (verificar diametro poste) | 1.0 |
 
 ---
 

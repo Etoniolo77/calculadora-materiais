@@ -1,5 +1,5 @@
 """
-Script de Migração: JSON → SQLite
+Script de Migração: JSON -> SQLite
 Converte unified_db.json e master_data_bom.json para materials.db
 """
 import json
@@ -91,13 +91,13 @@ def create_schema(conn: sqlite3.Connection):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_bom_itens_cat ON bom_itens(categoria_id)")
     
     conn.commit()
-    print("✓ Schema criado com sucesso")
+    print("[OK] Schema criado com sucesso")
 
 
 def migrate_unified_db(conn: sqlite3.Connection, json_path: Path):
     """Migra unified_db.json para SQLite."""
     if not json_path.exists():
-        print(f"⚠ Arquivo não encontrado: {json_path}")
+        print(f"[AVISO] Arquivo não encontrado: {json_path}")
         return
     
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -118,7 +118,7 @@ def migrate_unified_db(conn: sqlite3.Connection, json_path: Path):
         except Exception as e:
             print(f"  Erro ao inserir material {codigo}: {e}")
     
-    print(f"✓ {materiais_count} materiais migrados")
+    print(f"[OK] {materiais_count} materiais migrados")
     
     # 2. Migrar Estruturas
     structures = data.get('structures', {})
@@ -153,14 +153,14 @@ def migrate_unified_db(conn: sqlite3.Connection, json_path: Path):
                     materiais_est_count += 1
     
     conn.commit()
-    print(f"✓ {estruturas_count} estruturas migradas")
-    print(f"✓ {materiais_est_count} materiais de estrutura migrados")
+    print(f"[OK] {estruturas_count} estruturas migradas")
+    print(f"[OK] {materiais_est_count} materiais de estrutura migrados")
 
 
 def migrate_master_bom(conn: sqlite3.Connection, json_path: Path):
     """Migra master_data_bom.json para SQLite."""
     if not json_path.exists():
-        print(f"⚠ Arquivo não encontrado: {json_path}")
+        print(f"[AVISO] Arquivo não encontrado: {json_path}")
         return
     
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -206,8 +206,8 @@ def migrate_master_bom(conn: sqlite3.Connection, json_path: Path):
                 itens_count += 1
     
     conn.commit()
-    print(f"✓ {categorias_count} categorias BOM migradas")
-    print(f"✓ {itens_count} itens BOM migrados")
+    print(f"[OK] {categorias_count} categorias BOM migradas")
+    print(f"[OK] {itens_count} itens BOM migrados")
 
 
 def rebuild_fts(conn: sqlite3.Connection):
@@ -215,7 +215,7 @@ def rebuild_fts(conn: sqlite3.Connection):
     cursor = conn.cursor()
     cursor.execute("INSERT INTO materiais_fts(materiais_fts) VALUES('rebuild')")
     conn.commit()
-    print("✓ Índice FTS5 reconstruído")
+    print("[OK] Índice FTS5 reconstruído")
 
 
 def validate_migration(conn: sqlite3.Connection):
@@ -245,8 +245,10 @@ def validate_migration(conn: sqlite3.Connection):
 
 
 def main():
-    base_dir = Path(__file__).parent
-    db_path = base_dir / "materials.db"
+    project_root = Path(__file__).resolve().parents[1]
+    data_dir = project_root / "data"
+    db_path = data_dir / "materials.db"
+    data_dir.mkdir(parents=True, exist_ok=True)
     
     # Remover banco existente para recriar
     if db_path.exists():
@@ -260,12 +262,12 @@ def main():
     
     try:
         create_schema(conn)
-        migrate_unified_db(conn, base_dir / "unified_db.json")
-        migrate_master_bom(conn, base_dir / "master_data_bom.json")
+        migrate_unified_db(conn, data_dir / "unified_db.json")
+        migrate_master_bom(conn, data_dir / "master_data_bom.json")
         rebuild_fts(conn)
         validate_migration(conn)
-        
-        print("\n✅ Migração concluída com sucesso!")
+
+        print("\n[OK] Migracao concluida com sucesso!")
         print(f"Banco criado: {db_path}")
         print(f"Tamanho: {db_path.stat().st_size / 1024:.1f} KB")
         

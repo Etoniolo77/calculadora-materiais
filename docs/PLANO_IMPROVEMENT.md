@@ -156,7 +156,7 @@ Backlog técnico (itens 1 a 6):
 - Itens de baixa confiança destacados e exigência de revisão para exportar.
 
 4. Aprendizado com correção do usuário: ✅ Concluído
-- Correções manuais salvas em `core/manual_corrections.json`.
+- Correções manuais salvas em `storage/manual_corrections.json`.
 - Reaproveitamento automático em cálculos futuros.
 
 5. Testes de regressão robustos: ✅ Concluído (estrutura e casos)
@@ -175,9 +175,9 @@ Itens de implantação corporativa (Office 365/Teams):
 
 ### 13.1 Toolkit de publicação interna entregue
 - `scripts/setup_internal_publish.ps1`
-- `scripts/start_internal_streamlit.ps1`
-- `scripts/stop_internal_streamlit.ps1`
-- `scripts/healthcheck_internal_streamlit.ps1`
-- `scripts/configure_iis_reverse_proxy.ps1`
-- `deploy/iis/web.config.template`
+- `scripts/start_internal_fastapi.ps1`
+- `scripts/stop_internal_fastapi.ps1`
+- `scripts/healthcheck_internal_fastapi.ps1`
+- `scripts/configure_iis_reverse_proxy_fastapi.ps1`
+- `deploy/iis/web.fastapi.config.template`
 - `docs/PUBLICACAO_INTERNA_OFFICE365.md`

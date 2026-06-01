@@ -23,7 +23,8 @@ from pathlib import Path
 import sys
 
 BASE_DIR = Path(__file__).parent.parent
-DB_PATH  = BASE_DIR / "materials.db"
+DATA_DIR = BASE_DIR / "data"
+DB_PATH  = DATA_DIR / "materials.db"
 OUT_DIR  = BASE_DIR / "Bases_Dados"
 OUT_FILE = OUT_DIR / f"EXPORT_DB_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
@@ -73,7 +74,7 @@ def main():
         ],
         "Valor": [
             datetime.now().strftime("%d/%m/%Y %H:%M"),
-            str(DB_PATH.name),
+            str(DB_PATH.relative_to(BASE_DIR)),
             total_est,
             total_mat,
             total_relacoes,

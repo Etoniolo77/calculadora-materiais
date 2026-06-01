@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login Corporativo - Calculadora de Materiais</title>
+  <link rel="stylesheet" href="/frontend/styles.css?v=__APP_VERSION__" />
+</head>
+<body>
+  <main class="container">
+    <section class="card" style="max-width: 560px; margin: 40px auto;">
+      <h1>Calculadora de Materiais</h1>
+      <p class="subtitle">Acesso permitido apenas com e-mail corporativo + PIN.</p>
+      <p id="loginInfo" class="status"></p>
+      <form method="post" action="/auth/local-login" style="margin-top: 10px;">
+        <label>E-mail corporativo
+          <input type="text" name="email" placeholder="seu.nome@eletromarquez.com.br" />
+        </label>
+        <label style="margin-top: 8px;">PIN de acesso
+          <input type="password" name="pin" placeholder="PIN corporativo" />
+        </label>
+        <div class="row" style="margin-top: 10px;">
+          <button type="submit" class="btnSecondary">Entrar</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const info = document.getElementById("loginInfo");
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get("error");
+    if (err) {
+      info.textContent = decodeURIComponent(err);
+      info.className = "status err";
+    } else {
+      info.textContent = "Use seu e-mail corporativo e o PIN de acesso.";
+      info.className = "status ok";
+    }
+  </script>
+</body>
+</html>

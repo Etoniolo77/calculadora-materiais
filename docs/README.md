@@ -1,6 +1,12 @@
 # ⚡ Calculadora de Materiais - Eletromarquez
 
-Este projeto é uma ferramenta web desenvolvida em Python (Streamlit) para auxiliar engenheiros e programadores na extração, cálculo e geração de Listas de Materiais (BOM - Bill of Materials) a partir de projetos de redes elétricas em PDF.
+Este projeto é uma ferramenta web para auxiliar engenheiros e programadores na extração, cálculo e geração de Listas de Materiais (BOM - Bill of Materials) a partir de projetos de redes elétricas em PDF.
+
+## Stack Oficial
+
+- **Backend oficial**: `FastAPI`
+- **Frontend oficial**: `HTML/CSS/JS` estático em `frontend/`
+- **Motor de negócio**: módulos em `core/`
 
 ## 🚀 Funcionalidades
 
@@ -12,7 +18,7 @@ Este projeto é uma ferramenta web desenvolvida em Python (Streamlit) para auxil
 
 ## 🛠️ Tecnologias Utilizadas
 
-- **Interface**: [Streamlit](https://streamlit.io/)
+- **Interface oficial**: HTML/CSS/JS servido pelo FastAPI
 - **Processamento de Dados**: Pandas
 - **Extração de PDF**: pdfplumber
 - **Geração de PDF**: ReportLab
@@ -20,37 +26,42 @@ Este projeto é uma ferramenta web desenvolvida em Python (Streamlit) para auxil
 
 ## 📂 Estrutura do Projeto
 
-Principais arquivos e suas funções:
+Principais pastas e arquivos:
 
-- `app.py`: Interface principal do usuário e fluxo da aplicação.
-- `engine.py`: O "cérebro" do sistema. Contém a lógica de cálculo de materiais e resolução de tipos de postes/braçadeiras.
-- `extractor.py`: Responsável por ler o PDF e identificar padrões de texto (regex) para extrair dados do projeto.
-- `database_sqlite.py` & `database_loader.py`: Gerenciam a conexão e o carregamento dos materiais para o banco de dados local.
-- `final_report.py`: Script para formatação e geração do relatório final de materiais em PDF.
-- `materials.db`: Banco de dados SQLite contendo os códigos SAP e composições de kits.
-- `requirements.txt`: Lista de dependências Python necessárias.
+- `backend/app_fastapi.py`: API oficial e entrega do frontend.
+- `frontend/`: interface oficial para operação.
+- `core/engine.py`: motor de cálculo de materiais.
+- `core/extractor.py`: leitura e interpretação dos PDFs.
+- `core/database_sqlite.py`: acesso ao banco oficial.
+- `data/materials.db`: banco SQLite oficial.
+- `data/unified_db.json`: base consolidada oficial.
+- `data/vocabulary.json`: vocabulário técnico oficial.
+- `storage/manual_corrections.json`: aprendizado operacional e correções manuais.
 
 ## ⚙️ Como Executar
 
-1.  **Instale as dependências**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+1. **Instale as dependências**:
+   ```bash
+   pip install -r core/requirements.txt
+   ```
 
-2.  **Inicie a aplicação**:
-    ```bash
-    streamlit run app.py
-    ```
+2. **Inicie a aplicação oficial**:
+   ```bash
+   powershell -ExecutionPolicy Bypass -File .\scripts\start_internal_fastapi.ps1
+   ```
 
-3.  **Utilização**:
-    - Faça o upload do arquivo PDF do projeto na barra lateral.
-    - Revise os dados extraídos na área central.
-    - Ajuste os tipos de postes e equipamentos nos painéis expansíveis.
-    - Clique em "Exportar PDF" para obter a lista final.
+3. **Acesse**:
+   - `http://127.0.0.1:8600/`
+
+4. **Utilização**:
+   - Faça o upload do arquivo PDF do projeto.
+   - Revise os dados extraídos.
+   - Ajuste os tipos de postes e equipamentos.
+   - Exporte CSV ou PDF após validar a BOM.
 
 ## 🧹 Limpeza e Manutenção
 
-Para manter a integridade do banco de dados ou migrar novos dados de planilhas Excel para o SQLite, utilize os scripts `migrate_to_sqlite.py` e `database_loader.py`.
+Para manter a integridade do banco de dados ou migrar novos dados de planilhas Excel para o SQLite, utilize os scripts em `scripts/` sempre apontando para a pasta oficial `data/`.
 
 ## 🏢 Publicação Interna (Office 365 / Teams)
 

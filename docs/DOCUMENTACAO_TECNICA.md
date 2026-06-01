@@ -1,7 +1,7 @@
 ---
 title: Documentação Técnica - Calculadora de Materiais
-description: Detalhamento da arquitetura, motor de cálculo (Engine) e estrutura de dados (SQLite)
-tags: [python, streamlit, sqlite, engenharia, bom]
+description: Detalhamento da arquitetura oficial, motor de cálculo (Engine) e estrutura de dados (SQLite)
+tags: [python, fastapi, sqlite, engenharia, bom]
 ---
 
 # ⚡ Calculadora de Materiais (BOM Engine)
@@ -12,10 +12,11 @@ A **Calculadora de Materiais** é o sistema core para automação de listas de m
 
 O sistema é dividido em camadas modulares para garantir que a lógica de negócio (cálculos) seja independente da interface de usuário:
 
-1. **Camada de Interface (`app.py`)**: Desenvolvida em Streamlit, foca na experiência do usuário para upload de PDFs e ajuste fino manual.
-2. **Motor de Cálculo (`engine.py`)**: A "inteligência" que decide quais materiais compõem cada poste, baseado em cargas, alturas e tipos de estruturas.
-3. **Persistência de Dados (`database_sqlite.py` + `materials.db`)**: Migramos de arquivos JSON/Excel para um banco **SQLite com FTS5 (Full Text Search)**, permitindo buscas instantâneas por termos técnicos.
-4. **Extrator de PDF (`extractor.py`)**: O componente responsável pela visão computacional e processamento de linguagem natural (NLP) do projeto.
+1. **Camada de API (`backend/app_fastapi.py`)**: Stack oficial de execução e integração com o frontend.
+2. **Camada de Interface (`frontend/`)**: Frontend estático servido pelo FastAPI para upload, revisão e exportação.
+3. **Motor de Cálculo (`core/engine.py`)**: A "inteligência" que decide quais materiais compõem cada poste, baseado em cargas, alturas e tipos de estruturas.
+4. **Persistência de Dados (`core/database_sqlite.py` + `data/materials.db`)**: Banco **SQLite com FTS5 (Full Text Search)** para buscas instantâneas por termos técnicos.
+5. **Extrator de PDF (`core/extractor.py`)**: O componente responsável pela visão computacional e processamento de linguagem natural (NLP) do projeto.
 
 ## 📄 Lógica de Extração de PDF (`extractor.py`)
 
@@ -48,7 +49,7 @@ Utiliza uma lógica de "Varredura de Linha":
 Para garantir a performance e a integridade dos dados, o sistema utiliza um banco de dados SQLite. O arquivo `migrate_to_sqlite.py` é o responsável por construir este banco a partir das fontes de verdade (JSON).
 
 ### 1. Fontes de Dados (Sources)
-- **`unified_db.json`**: Contém a biblioteca de materiais SAP e as "receitas" das estruturas técnicas.
+- **`data/unified_db.json`**: Contém a biblioteca de materiais SAP e as "receitas" das estruturas técnicas.
 - **`master_data_bom.json`**: Contém a hierarquia de categorias e subcategorias para o Bill of Materials.
 - **`Codigos de Materiais Novos.xlsx`**: Planilha de referência para traduções de códigos antigos.
 
@@ -71,15 +72,15 @@ Implementa as "Regras de Ouro" da engenharia elétrica:
 Resolve o problema de termos regionais ou siglas:
 - Transforma "CH" em "CHAVE SECCIONADORA".
 - Transforma "TRAFO" em "TRANSFORMADOR".
-- **Aprendizado**: O sistema registra correções manuais do usuário em `vocabulary.json` para "aprender" novos termos no futuro.
+- **Aprendizado**: O sistema registra correções e vocabulário operacional na trilha oficial `data/vocabulary.json`.
 
 ## 🔄 Procedimento de Manutenção (Segurança)
 
 Para garantir que "nada se perca" (conforme solicitado pelo usuário):
-1. **Sempre manter os arquivos JSON (`unified_db.json`, `master_data_bom.json`) atualizados.** Eles são a fonte primária.
+1. **Sempre manter os arquivos oficiais em `data/` atualizados.** A fonte primária operacional é `data/unified_db.json`.
 2. Caso o banco `materials.db` precise ser resetado ou atualizado, basta rodar:
    ```bash
-   python migrate_to_sqlite.py
+   python scripts/migrate_to_sqlite.py
    ```
    Este script apagará o banco antigo e recriará toda a estrutura e índices do zero em segundos.
 
@@ -106,7 +107,7 @@ O arquivo `materials.db` contém as seguintes tabelas críticas:
 
 ## 🛠️ Manutenção e Segurança
 
-- **Backup**: O arquivo `materials.db` e `Codigos de Materiais Novos.xlsx` são as fontes de verdade.
+- **Backup**: O conjunto oficial para runtime é `data/materials.db`, `data/unified_db.json` e `data/vocabulary.json`.
 - **Atualização**: Novos kits devem ser adicionados via script de migração (`migrate_to_sqlite.py`) para manter a performance do banco.
 
 ---

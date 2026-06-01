@@ -1,5 +1,7 @@
 # Relatório Técnico - Problema de Renderização via IIS (localhost:8080)
 
+> Documento historico do incidente com Streamlit. Mantido apenas como evidencia de causa raiz e da decisao de abandono do stack antigo.
+
 Data: 2026-04-21  
 Projeto: PRJ-13-Calculadora  
 Ambiente: Windows local (máquina do usuário), IIS + ARR + Streamlit
@@ -145,3 +147,27 @@ Nova direcao:
 
 Documentacao operacional da migracao:
 - `docs/MIGRACAO_STACK_FASTAPI.md`
+
+## 13. Recomendacoes Tecnicas (Calculo e Extracao)
+Com base nos testes dos diagramas em `docs/Diagramas de Testes`, recomendamos manter as seguintes melhorias estruturais:
+
+1. Higienizacao de OCR no modo por caixas (ja aplicado)
+- Bloquear tokens de cabo/bitola sendo lidos como poste/estrutura (ex.: `3X185AX`, `P01`).
+- Resultado esperado: reducao de excesso de materiais e de contagens absurdas de cinta/parafuso.
+
+2. Normalizacao defensiva de entrada (ja aplicado)
+- Normalizar `Tipo Poste` no backend (captura apenas tipologia valida, ex.: `C11/300`).
+- Normalizar lista de estruturas removendo `Pxx`, duplicidades e sufixos de retirada/existente no campo bruto.
+
+3. Recomendacoes automaticas na interface (ja aplicado)
+- API retorna `recommendations` em `extract` e `calculate` com alertas de:
+  - postes sem tipologia;
+  - postes sem estruturas;
+  - estruturas suspeitas de OCR;
+  - itens `VERIFICAR` na BOM;
+  - possivel excesso de cintas para a quantidade de postes.
+
+4. Melhorias adicionais priorizadas (proxima sprint)
+- Alias no banco para estruturas de ramal ausentes (`1S1`, `1S2`) para reduzir `VERIFICAR` residual.
+- Regra de inferencia de tipologia quando houver apenas 1 `Pxx` explicito e sem caixa valida.
+- Golden tests com PDFs reais para evitar regressao de extração.

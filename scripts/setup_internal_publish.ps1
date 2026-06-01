@@ -23,8 +23,6 @@ Write-Host "[SETUP] Projeto: $ProjectRoot"
 
 $venvPath = Join-Path $ProjectRoot ".venv"
 $requirements = Join-Path $ProjectRoot "core\requirements.txt"
-$streamlitDir = Join-Path $ProjectRoot ".streamlit"
-$streamlitCfg = Join-Path $streamlitDir "config.toml"
 $storageDir = Join-Path $ProjectRoot "storage"
 $tmpDir = Join-Path $storageDir "tmp"
 
@@ -98,26 +96,5 @@ if (Test-Path $pythonExe) {
     throw "Python da venv não encontrado: $pythonExe"
 }
 
-if (-not (Test-Path $streamlitDir)) {
-    New-Item -ItemType Directory -Path $streamlitDir | Out-Null
-}
-$cfg = @"
-[server]
-headless = true
-enableCORS = false
-enableXsrfProtection = false
-enableWebsocketCompression = false
-fileWatcherType = "none"
-runOnSave = false
-address = "127.0.0.1"
-port = 8501
-maxUploadSize = 200
-
-[browser]
-gatherUsageStats = false
-"@
-
-Set-Content -Path $streamlitCfg -Value $cfg -Encoding UTF8
-
 Write-Host "[SETUP] Concluído."
-Write-Host "[SETUP] Próximo passo: executar scripts\start_internal_streamlit.ps1"
+Write-Host "[SETUP] Próximo passo: executar scripts\start_internal_fastapi.ps1"

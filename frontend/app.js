@@ -2,16 +2,56 @@ const state = {
   poles: [],
   cables: [],
   bom: [],
+  bomByPole: {},
+  structureAudit: null,
+  selectedBomPole: "",
   validation: null,
+  recommendations: [],
+  qualityGate: null,
+  gateUi: {
+    overrideEnabled: false,
+    overrideReason: "",
+    lowConfReviewConfirmed: false,
+  },
 };
 
+const APP_MODE = document.body?.dataset?.appMode || "programacao";
+
+const POLE_TYPES = [
+  "Desconhecido",
+  "C11/300",
+  "C11/400",
+  "C11/600",
+  "C11/1000",
+  "C12/300",
+  "C12/400",
+  "C12/600",
+  "C12/1000",
+  "DT11/300",
+  "DT11/600",
+  "DT12/300",
+  "D11/300",
+];
+const TRAFO_OPTIONS = ["", "MONO-10kVA", "MONO-15kVA", "MONO-25kVA", "TRI-30kVA", "TRI-45kVA", "TRI-75kVA"];
+const CHAVE_OPTIONS = ["", "FACA", "FUSIVEL", "SECCIONADORA"];
+const CABLE_TYPES = ["BT", "MT"];
+let structureHints = ["N1", "N2F", "N3F", "N4F", "B2F", "CE2", "CE4", "ET1BR", "ET1T", "ET4A", "S1", "S2", "S3"];
+const CABLE_DESC_HINTS = ["MT 2X2AN", "MT 2X4ANA", "MT 3X2ANA(4ANA)", "BT 3X70+70", "BT 3X120+70"];
+
 const els = {
+  appVersionInfo: document.getElementById("appVersionInfo"),
+  btnGoAsBuilt: document.getElementById("btnGoAsBuilt"),
+  btnGoProgramacao: document.getElementById("btnGoProgramacao"),
+  btnCheckUpdate: document.getElementById("btnCheckUpdate"),
+  btnApplyUpdate: document.getElementById("btnApplyUpdate"),
+  updateStatus: document.getElementById("updateStatus"),
   pdfFile: document.getElementById("pdfFile"),
   btnExtract: document.getElementById("btnExtract"),
   extractStatus: document.getElementById("extractStatus"),
   ordem: document.getElementById("ordem"),
   equipe: document.getElementById("equipe"),
   programador: document.getElementById("programador"),
+  fiscal: document.getElementById("fiscal"),
   observacoes: document.getElementById("observacoes"),
   polesTableBody: document.querySelector("#polesTable tbody"),
   cablesTableBody: document.querySelector("#cablesTable tbody"),
@@ -20,10 +60,41 @@ const els = {
   btnCalculate: document.getElementById("btnCalculate"),
   calcStatus: document.getElementById("calcStatus"),
   validationBox: document.getElementById("validationBox"),
+  structureAuditBox: document.getElementById("structureAuditBox"),
+  qualityGateBox: document.getElementById("qualityGateBox"),
+  recommendationsBox: document.getElementById("recommendationsBox"),
   bomTableBody: document.querySelector("#bomTable tbody"),
+  bomPoleSelect: document.getElementById("bomPoleSelect"),
+  bomPoleTableBody: document.querySelector("#bomPoleTable tbody"),
   btnDownloadCsv: document.getElementById("btnDownloadCsv"),
   btnDownloadPdf: document.getElementById("btnDownloadPdf"),
 };
+
+const updateState = {
+  available: false,
+  targetVersion: "",
+  packageUrl: "",
+};
+
+function resolveBaseUrl() {
+  const origin = String(window.location.origin || "");
+  if (origin.startsWith("http://") || origin.startsWith("https://")) {
+    return origin;
+  }
+  return "http://127.0.0.1:8600";
+}
+
+function navigateWithVersion(path) {
+  const stamp = Date.now();
+  const base = resolveBaseUrl();
+  window.location.href = `${base}${path}?v=${stamp}`;
+}
+
+window.addEventListener("error", (event) => {
+  if (els.updateStatus) {
+    setStatus(els.updateStatus, `Erro de interface: ${event.message}`, false);
+  }
+});
 
 function setStatus(el, text, ok = true) {
   el.textContent = text;
@@ -40,10 +111,43 @@ function toFloat(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeIdCodes(prefix, rawValue) {
+  const prefixUpper = String(prefix || "").trim().toUpperCase();
+  if (!prefixUpper) return [];
+  const values = Array.isArray(rawValue)
+    ? rawValue
+    : String(rawValue ?? "")
+      .split(/[;,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  const out = [];
+  values.forEach((item) => {
+    const up = String(item ?? "").toUpperCase().trim();
+    if (!up) return;
+    const cleaned = up.replace(/\s+/g, "");
+    const match = cleaned.match(new RegExp(`^${prefixUpper}[\\-:]*([0-9]{6})$`));
+    if (!match) return;
+    const norm = `${prefixUpper}${match[1]}`;
+    if (!out.includes(norm)) out.push(norm);
+  });
+  return out;
+}
+
 function ensurePoleDefaults(pole, idx) {
   const p = pole || {};
   const est = Array.isArray(p.Est) ? p.Est : [];
   const estaiQtd = typeof p.Estai === "object" ? toInt(p.Estai?.Qtd, 0) : toInt(p.Estai, 0);
+  const etCodes = normalizeIdCodes("ET", p.EtCodes);
+  const estfCodes = normalizeIdCodes("ESTF", p.EstfCodes);
   return {
     id: String(p.id || `P${idx + 1}`).toUpperCase(),
     Pole: String(p.Pole || "Desconhecido"),
@@ -54,6 +158,8 @@ function ensurePoleDefaults(pole, idx) {
     ParaRaio: { Type: "CRUZETA", Qtd: 0 },
     Aterramento: { Qtd: 0 },
     Ramal: { Type: null, Qtd: 0 },
+    EtCodes: etCodes,
+    EstfCodes: estfCodes,
   };
 }
 
@@ -63,6 +169,110 @@ function ensureCableDefaults(cable) {
     Tipo: String(c.Tipo || "BT").toUpperCase(),
     Desc: String(c.Desc || ""),
     Qtd: toFloat(c.Qtd, 0),
+  };
+}
+
+function renderDatalist(id, options) {
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement("datalist");
+    el.id = id;
+    document.body.appendChild(el);
+  }
+  el.innerHTML = options.map((o) => `<option value="${escapeHtml(o)}"></option>`).join("");
+}
+
+async function refreshStructureHints() {
+  try {
+    const resp = await fetch("/api/structures");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const apiHints = Array.isArray(data?.structures) ? data.structures : [];
+    if (!apiHints.length) return;
+    const merged = [...new Set([...apiHints, ...structureHints])]
+      .map((v) => String(v).trim().toUpperCase())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+    structureHints = merged;
+    renderDatalist("structureHints", structureHints);
+    renderPolesTable();
+  } catch (_err) {
+    // fallback silencioso para a lista local
+  }
+}
+
+function buildSelectOptions(options, currentValue, placeholder = "") {
+  const current = String(currentValue ?? "");
+  const set = new Set(options.map((x) => String(x)));
+  if (current && !set.has(current)) {
+    set.add(current);
+  }
+  const values = [...set];
+  const placeholderOpt = placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : "";
+  const items = values
+    .map((v) => `<option value="${escapeHtml(v)}" ${v === current ? "selected" : ""}>${escapeHtml(v || "-")}</option>`)
+    .join("");
+  return `${placeholderOpt}${items}`;
+}
+
+function buildGateState(serverGate = {}) {
+  const gate = serverGate || {};
+  const overrideEnabled = Boolean(state.gateUi.overrideEnabled);
+  const overrideReason = String(state.gateUi.overrideReason || "").trim();
+  const lowConfReviewConfirmed = Boolean(state.gateUi.lowConfReviewConfirmed);
+  const lowConfidenceCount = toInt(gate.low_confidence_count, 0);
+  const errors = toInt(gate.errors, state.validation?.errors || 0);
+  const warnings = toInt(gate.warnings, state.validation?.warnings || 0);
+  const verificarCount = toInt(gate.verificar_count, 0);
+  const overrideValid = overrideEnabled && overrideReason.length >= 10;
+  const blockedReasons = [];
+
+  if (errors > 0 && !overrideValid) {
+    blockedReasons.push("erros_criticos");
+  }
+  if (lowConfidenceCount > 0 && !lowConfReviewConfirmed) {
+    blockedReasons.push("baixa_confianca_sem_confirmacao");
+  }
+
+  return {
+    ...gate,
+    errors,
+    warnings,
+    verificar_count: verificarCount,
+    low_confidence_count: lowConfidenceCount,
+    override_enabled: overrideEnabled,
+    override_reason: overrideReason,
+    override_valid: overrideValid,
+    low_conf_review_confirmed: lowConfReviewConfirmed,
+    blocked: blockedReasons.length > 0,
+    blocked_reasons: blockedReasons,
+  };
+}
+
+function getExportPayload(extra = {}) {
+  const gate = buildGateState(state.qualityGate);
+  return {
+    bom: state.bom,
+    validation: state.validation || {},
+    override_enabled: gate.override_enabled,
+    override_reason: gate.override_reason,
+    low_conf_review_confirmed: gate.low_conf_review_confirmed,
+    ...extra,
+  };
+}
+
+function syncExportButtons() {
+  const gate = buildGateState(state.qualityGate);
+  const disabled = state.bom.length === 0 || gate.blocked;
+  els.btnDownloadCsv.disabled = disabled;
+  els.btnDownloadPdf.disabled = disabled;
+}
+
+function resetGateUi() {
+  state.gateUi = {
+    overrideEnabled: false,
+    overrideReason: "",
+    lowConfReviewConfirmed: false,
   };
 }
 
@@ -79,6 +289,8 @@ function collectPolesFromTable() {
       .split(",")
       .map((x) => x.trim().toUpperCase())
       .filter(Boolean);
+    const etCodesRaw = row.querySelector('[data-field="EtCodes"]')?.value || "";
+    const estfCodesRaw = row.querySelector('[data-field="EstfCodes"]')?.value || "";
     return ensurePoleDefaults(
       {
         id: id.toUpperCase(),
@@ -87,6 +299,10 @@ function collectPolesFromTable() {
         Trafo: trafo,
         Chave: chave,
         Estai: { Type: "CC - 14M", Qtd: estaiQtd },
+        EtCodes: normalizeIdCodes("ET", etCodesRaw),
+        EstfCodes: [...normalizeIdCodes("ESTF", etCodesRaw), ...normalizeIdCodes("ESTF", estfCodesRaw)].filter(
+          (v, i, arr) => arr.indexOf(v) === i
+        ),
       },
       idx
     );
@@ -111,20 +327,47 @@ function renderPolesTable() {
     const p = ensurePoleDefaults(pole, idx);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><input data-field="id" value="${p.id}" /></td>
-      <td><input data-field="Pole" value="${p.Pole}" /></td>
-      <td><input data-field="Est" value="${p.Est.join(", ")}" /></td>
-      <td><input data-field="Trafo" value="${p.Trafo || ""}" /></td>
-      <td><input data-field="Chave" value="${p.Chave || ""}" /></td>
+      <td><input data-field="id" value="${escapeHtml(p.id)}" /></td>
+      <td><select data-field="Pole">${buildSelectOptions(POLE_TYPES, p.Pole, "Selecione")}</select></td>
+      <td>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input data-field="Est" value="${escapeHtml(p.Est.join(", "))}" placeholder="Ex: U3, ET1T" />
+          <select data-field="EstPick">${buildSelectOptions(["", ...structureHints], "", "Estrutura")}</select>
+          <button type="button" class="btnAddStruct">+</button>
+        </div>
+      </td>
+      <td><select data-field="Trafo">${buildSelectOptions(TRAFO_OPTIONS, p.Trafo || "", "Selecione")}</select></td>
+      <td><input data-field="EtCodes" value="${escapeHtml((p.EtCodes || []).join(", "))}" placeholder="ET123456 ou ESTF123456" /></td>
+      <td><select data-field="Chave">${buildSelectOptions(CHAVE_OPTIONS, p.Chave || "", "Selecione")}</select></td>
       <td><input data-field="EstaiQtd" type="number" min="0" step="1" value="${p.Estai.Qtd}" /></td>
+      <input type="hidden" data-field="EstfCodes" value="${escapeHtml((p.EstfCodes || []).join(", "))}" />
       <td><button type="button" class="btnRemove">Remover</button></td>
     `;
+    tr.querySelector(".btnAddStruct").addEventListener("click", () => {
+      const estInput = tr.querySelector('[data-field="Est"]');
+      const estPick = tr.querySelector('[data-field="EstPick"]');
+      const picked = String(estPick.value || "").trim().toUpperCase();
+      if (!picked) return;
+      const current = String(estInput.value || "")
+        .split(",")
+        .map((x) => x.trim().toUpperCase())
+        .filter(Boolean);
+      if (!current.includes(picked)) {
+        current.push(picked);
+        estInput.value = current.join(", ");
+      }
+      estPick.value = "";
+      collectPolesFromTable();
+    });
     tr.querySelector(".btnRemove").addEventListener("click", () => {
       state.poles.splice(idx, 1);
       renderPolesTable();
     });
-    tr.querySelectorAll("input").forEach((input) => {
+    tr.querySelectorAll("input,select").forEach((input) => {
       input.addEventListener("input", () => {
+        collectPolesFromTable();
+      });
+      input.addEventListener("change", () => {
         collectPolesFromTable();
       });
     });
@@ -138,8 +381,8 @@ function renderCablesTable() {
     const c = ensureCableDefaults(cable);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><input data-field="Tipo" value="${c.Tipo}" /></td>
-      <td><input data-field="Desc" value="${c.Desc}" /></td>
+      <td><select data-field="Tipo">${buildSelectOptions(CABLE_TYPES, c.Tipo, "Selecione")}</select></td>
+      <td><input data-field="Desc" list="cableDescHints" value="${escapeHtml(c.Desc)}" /></td>
       <td><input data-field="Qtd" type="number" min="0" step="0.01" value="${c.Qtd}" /></td>
       <td><button type="button" class="btnRemove">Remover</button></td>
     `;
@@ -147,8 +390,11 @@ function renderCablesTable() {
       state.cables.splice(idx, 1);
       renderCablesTable();
     });
-    tr.querySelectorAll("input").forEach((input) => {
+    tr.querySelectorAll("input,select").forEach((input) => {
       input.addEventListener("input", () => {
+        collectCablesFromTable();
+      });
+      input.addEventListener("change", () => {
         collectCablesFromTable();
       });
     });
@@ -157,16 +403,49 @@ function renderCablesTable() {
 }
 
 function renderBom() {
-  els.bomTableBody.innerHTML = "";
-  for (const row of state.bom) {
+  renderBomRows(els.bomTableBody, state.bom);
+}
+
+function renderBomRows(targetBody, rows) {
+  if (!targetBody) return;
+  targetBody.innerHTML = "";
+  for (const row of rows || []) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row["Código SAP"] ?? ""}</td>
-      <td>${row["Descrição"] ?? ""}</td>
-      <td>${row["Quantidade"] ?? ""}</td>
+      <td>${escapeHtml(row["Código SAP"] ?? "")}</td>
+      <td>${escapeHtml(row["Descrição"] ?? "")}</td>
+      <td>${escapeHtml(row["Quantidade"] ?? "")}</td>
     `;
-    els.bomTableBody.appendChild(tr);
+    targetBody.appendChild(tr);
   }
+}
+
+function renderBomByPoleSelector() {
+  if (!els.bomPoleSelect) return;
+  const keys = Object.keys(state.bomByPole || {});
+  if (keys.length === 0) {
+    els.bomPoleSelect.innerHTML = '<option value="">Sem dados</option>';
+    els.bomPoleSelect.value = "";
+    state.selectedBomPole = "";
+    return;
+  }
+  const hasCurrent = state.selectedBomPole && keys.includes(state.selectedBomPole);
+  if (!hasCurrent) {
+    state.selectedBomPole = keys[0];
+  }
+  els.bomPoleSelect.innerHTML = keys
+    .map((k) => {
+      const label = k === "CABOS_GERAIS" ? "CABOS GERAIS" : k;
+      return `<option value="${escapeHtml(k)}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  els.bomPoleSelect.value = state.selectedBomPole;
+}
+
+function renderBomByPole() {
+  if (!els.bomPoleTableBody) return;
+  const rows = (state.bomByPole && state.selectedBomPole && state.bomByPole[state.selectedBomPole]) || [];
+  renderBomRows(els.bomPoleTableBody, rows);
 }
 
 function renderValidation() {
@@ -175,13 +454,225 @@ function renderValidation() {
     return;
   }
   const v = state.validation;
+  const issues = Array.isArray(v.issues) ? v.issues : [];
+  const issueItems = issues
+    .map((issue) => {
+      const severity = String(issue.severity || "info").toUpperCase();
+      const message = escapeHtml(issue.message || "");
+      const source = escapeHtml(issue.source || "");
+      return `<li><strong>[${severity}]</strong> ${message}${source ? ` <span>(${source})</span>` : ""}</li>`;
+    })
+    .join("");
   els.validationBox.innerHTML = `
-    <strong>Validacao:</strong>
-    Total: ${v.total || 0},
-    Erros: ${v.errors || 0},
-    Avisos: ${v.warnings || 0},
-    Infos: ${v.infos || 0}
+    <div class="panel">
+      <div class="panel-title">Validacao Tecnica</div>
+      <div class="metrics-row">
+        <span class="metric-chip ${v.errors > 0 ? "err" : "ok"}">Erros: ${v.errors || 0}</span>
+        <span class="metric-chip ${v.warnings > 0 ? "warn" : "ok"}">Avisos: ${v.warnings || 0}</span>
+        <span class="metric-chip ok">Infos: ${v.infos || 0}</span>
+      </div>
+      ${issueItems ? `<ul class="issue-list">${issueItems}</ul>` : "<div>Nenhuma inconsistencia tecnica reportada.</div>"}
+    </div>
   `;
+}
+
+function renderRecommendations() {
+  const recs = Array.isArray(state.recommendations) ? state.recommendations : [];
+  if (recs.length === 0) {
+    els.recommendationsBox.innerHTML = "";
+    return;
+  }
+  const lis = recs
+    .map((r) => {
+      const level = String(r.level || "baixa").toLowerCase();
+      const title = escapeHtml(r.title || "Recomendacao");
+      const msg = escapeHtml(r.message || "");
+      return `<li class="rec-${level}"><strong>${title}:</strong> ${msg}</li>`;
+    })
+    .join("");
+  els.recommendationsBox.innerHTML = `<div class="rec-title">Recomendacoes</div><ul class="rec-list">${lis}</ul>`;
+}
+
+function renderStructureAudit() {
+  const audit = state.structureAudit;
+  if (!audit || !Array.isArray(audit.poles) || audit.poles.length === 0) {
+    els.structureAuditBox.innerHTML = "";
+    return;
+  }
+
+  const summaryClass = audit.ok ? "ok" : "warn";
+  const polesHtml = audit.poles
+    .map((pole) => {
+      const poleStatus = pole.ok ? "ok" : "err";
+      const details = Array.isArray(pole.details) ? pole.details : [];
+      const detailRows = details
+        .map((d) => {
+          const detailStatus = d.ok ? "ok" : "err";
+          const missing = Array.isArray(d.missing) ? d.missing : [];
+          const missingList = missing.length
+            ? `<ul class="audit-missing-list">${missing
+              .map(
+                (m) =>
+                  `<li><strong>${escapeHtml(m.sap)}</strong> esperado ${escapeHtml(
+                    m.expected
+                  )}, calculado ${escapeHtml(m.actual)} (faltante ${escapeHtml(
+                    m.shortfall
+                  )})</li>`
+              )
+              .join("")}</ul>`
+            : "";
+
+          return `
+            <div class="audit-detail-row ${detailStatus}">
+              <div class="audit-detail-head">
+                <span class="audit-structure">${escapeHtml(d.structure || "-")}</span>
+                <span class="audit-canonical">→ ${escapeHtml(d.canonical || "-")}</span>
+                <span class="audit-badge ${detailStatus}">${d.ok ? "OK" : "Divergência"}</span>
+              </div>
+              ${d.reason ? `<div class="audit-reason">Motivo: ${escapeHtml(d.reason)}</div>` : ""}
+              ${missingList}
+            </div>
+          `;
+        })
+        .join("");
+
+      return `
+        <div class="audit-pole-card ${poleStatus}">
+          <div class="audit-pole-head">
+            <strong>${escapeHtml(pole.pole_id || "-")}</strong>
+            <span>${escapeHtml(pole.pole_type || "-")}</span>
+            <span class="audit-badge ${poleStatus}">${pole.ok ? "OK" : "Com divergências"}</span>
+          </div>
+          <div class="audit-detail-list">${detailRows || "<div class='audit-empty'>Sem estruturas avaliadas.</div>"}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  els.structureAuditBox.innerHTML = `
+    <div class="panel structure-audit-panel">
+      <div class="panel-title">Conferência de Estruturas (Extração × Cálculo)</div>
+      <div class="metrics-row">
+        <span class="metric-chip ${summaryClass}">Status: ${audit.ok ? "OK" : "Divergências"}</span>
+        <span class="metric-chip ok">Estruturas avaliadas: ${toInt(audit.total_structures, 0)}</span>
+        <span class="metric-chip ${audit.mismatch_count > 0 ? "warn" : "ok"}">Ocorrências: ${toInt(
+    audit.mismatch_count,
+    0
+  )}</span>
+      </div>
+      <div class="audit-poles-grid">${polesHtml}</div>
+    </div>
+  `;
+}
+
+function renderQualityGate() {
+  const gate = buildGateState(state.qualityGate);
+  if (!state.qualityGate && state.bom.length === 0) {
+    els.qualityGateBox.innerHTML = "";
+    syncExportButtons();
+    return;
+  }
+
+  const lowConfItems = state.bom.filter((row) => Number(row["Confiança"] || 0) < 0.7);
+  const lowConfList = lowConfItems
+    .slice(0, 8)
+    .map(
+      (row) =>
+        `<li><strong>${escapeHtml(row["Código SAP"] || "")}</strong> - ${escapeHtml(row["Descrição"] || "")} (confiança ${Number(
+          row["Confiança"] || 0
+        ).toFixed(2)})</li>`
+    )
+    .join("");
+
+  let alertHtml = "";
+  if (gate.blocked) {
+    const messages = [];
+    if (gate.blocked_reasons.includes("erros_criticos")) {
+      messages.push("Exportação bloqueada por erros críticos de validação.");
+    }
+    if (gate.blocked_reasons.includes("baixa_confianca_sem_confirmacao")) {
+      messages.push("Exportação bloqueada até confirmar a revisão dos itens de baixa confiança.");
+    }
+    alertHtml = `<div class="gate-alert err">${messages.join(" ")}</div>`;
+  } else if (gate.errors > 0 && gate.override_valid) {
+    alertHtml = `<div class="gate-alert ok">Exportação liberada por override justificado.</div>`;
+  } else {
+    alertHtml = `<div class="gate-alert ok">Gate de qualidade liberado para exportação.</div>`;
+  }
+
+  els.qualityGateBox.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">Gate de Qualidade</div>
+      <div class="metrics-row">
+        <span class="metric-chip ${gate.errors > 0 ? "err" : "ok"}">Erros: ${gate.errors}</span>
+        <span class="metric-chip ${gate.warnings > 0 ? "warn" : "ok"}">Avisos: ${gate.warnings}</span>
+        <span class="metric-chip ${gate.verificar_count > 0 ? "warn" : "ok"}">VERIFICAR: ${gate.verificar_count}</span>
+        <span class="metric-chip ${gate.low_confidence_count > 0 ? "warn" : "ok"}">Baixa confiança: ${gate.low_confidence_count}</span>
+      </div>
+      ${lowConfList
+      ? `<div class="panel-title">Itens para revisão manual</div><ul class="low-conf-list">${lowConfList}</ul>`
+      : ""
+    }
+      <div class="gate-controls">
+        ${gate.low_confidence_count > 0
+      ? `
+          <div class="gate-check">
+            <input id="lowConfReviewConfirmed" type="checkbox" ${gate.low_conf_review_confirmed ? "checked" : ""} />
+            <label for="lowConfReviewConfirmed">Confirmo que revisei os itens de baixa confiança antes da exportação.</label>
+          </div>
+        `
+      : ""
+    }
+        ${gate.errors > 0
+      ? `
+          <div class="gate-check">
+            <input id="overrideEnabled" type="checkbox" ${gate.override_enabled ? "checked" : ""} />
+            <label for="overrideEnabled">Forçar exportação mesmo com erro crítico, com justificativa auditável.</label>
+          </div>
+          ${gate.override_enabled
+        ? `<label>Justificativa obrigatória
+                <textarea id="overrideReason" placeholder="Descreva o motivo operacional para liberar a exportação. Minimo de 10 caracteres.">${escapeHtml(
+          gate.override_reason || ""
+        )}</textarea>
+              </label>`
+        : ""
+      }
+        `
+      : ""
+    }
+      </div>
+      ${alertHtml}
+    </div>
+  `;
+
+  const lowConfCheckbox = document.getElementById("lowConfReviewConfirmed");
+  if (lowConfCheckbox) {
+    lowConfCheckbox.addEventListener("change", (event) => {
+      state.gateUi.lowConfReviewConfirmed = Boolean(event.target.checked);
+      renderQualityGate();
+    });
+  }
+
+  const overrideCheckbox = document.getElementById("overrideEnabled");
+  if (overrideCheckbox) {
+    overrideCheckbox.addEventListener("change", (event) => {
+      state.gateUi.overrideEnabled = Boolean(event.target.checked);
+      if (!state.gateUi.overrideEnabled) {
+        state.gateUi.overrideReason = "";
+      }
+      renderQualityGate();
+    });
+  }
+
+  const overrideReasonEl = document.getElementById("overrideReason");
+  if (overrideReasonEl) {
+    overrideReasonEl.addEventListener("input", (event) => {
+      state.gateUi.overrideReason = event.target.value;
+      renderQualityGate();
+    });
+  }
+
+  syncExportButtons();
 }
 
 async function downloadFromEndpoint(path, payload, filenameFallback) {
@@ -191,8 +682,15 @@ async function downloadFromEndpoint(path, payload, filenameFallback) {
     body: JSON.stringify(payload),
   });
   if (!resp.ok) {
-    const msg = await resp.text();
-    throw new Error(msg || `Falha no download (${resp.status})`);
+    let message = `Falha no download (${resp.status})`;
+    try {
+      const data = await resp.json();
+      message = data.detail || message;
+    } catch {
+      const text = await resp.text();
+      if (text) message = text;
+    }
+    throw new Error(message);
   }
   const blob = await resp.blob();
   const url = URL.createObjectURL(blob);
@@ -205,50 +703,126 @@ async function downloadFromEndpoint(path, payload, filenameFallback) {
   URL.revokeObjectURL(url);
 }
 
-els.btnAddPole.addEventListener("click", () => {
-  state.poles.push(ensurePoleDefaults({}, state.poles.length));
-  renderPolesTable();
-});
-
-els.btnAddCable.addEventListener("click", () => {
-  state.cables.push(ensureCableDefaults({ Tipo: "BT", Desc: "", Qtd: 0 }));
-  renderCablesTable();
-});
-
-els.btnExtract.addEventListener("click", async () => {
+async function parseApiError(resp, fallbackMessage) {
+  let message = fallbackMessage;
   try {
-    const file = els.pdfFile.files[0];
-    if (!file) throw new Error("Selecione um PDF.");
-
-    setStatus(els.extractStatus, "Extraindo PDF...");
-    const form = new FormData();
-    form.append("file", file);
-
-    const resp = await fetch("/api/extract", { method: "POST", body: form });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || `Falha na extracao (${resp.status})`);
-
-    state.poles = (data.poles || []).map((p, idx) => ensurePoleDefaults(p, idx));
-    state.cables = (data.cables || []).map((c) => ensureCableDefaults(c));
-    state.validation = data.validation || null;
-
-    els.ordem.value = data.project_info?.Ordem || "";
-
-    renderPolesTable();
-    renderCablesTable();
-    renderValidation();
-    setStatus(els.extractStatus, `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos.`);
-  } catch (err) {
-    setStatus(els.extractStatus, err.message, false);
+    if (data?.detail) {
+      message = data.detail;
+    }
+  } catch {
+    const text = await resp.text();
+    if (text) {
+      message = text;
+    }
   }
-});
+  return message;
+}
 
-els.btnCalculate.addEventListener("click", async () => {
+async function checkForUpdates() {
+  try {
+    els.btnCheckUpdate.disabled = true;
+    els.btnApplyUpdate.disabled = true;
+    setStatus(els.updateStatus, "Consultando atualizacoes...");
+    const resp = await fetch("/api/update/check");
+    if (!resp.ok) {
+      const errorMessage = await parseApiError(resp, `Falha ao buscar atualizacao (${resp.status})`);
+      throw new Error(errorMessage);
+    }
+    const data = await resp.json();
+    updateState.available = Boolean(data.update_available);
+    updateState.targetVersion = String(data.remote_version || "");
+    updateState.packageUrl = String(data.package_url || "");
+
+    if (updateState.available) {
+      els.btnApplyUpdate.disabled = false;
+      setStatus(els.updateStatus, `Nova versao disponivel: ${data.remote_version} (atual: ${data.local_version}).`);
+    } else {
+      setStatus(els.updateStatus, `Aplicacao atualizada (${data.local_version}).`);
+    }
+  } catch (err) {
+    setStatus(els.updateStatus, err.message, false);
+  } finally {
+    els.btnCheckUpdate.disabled = false;
+  }
+}
+
+async function applyUpdate() {
+  try {
+    if (!updateState.available || !updateState.packageUrl || !updateState.targetVersion) {
+      throw new Error("Nenhuma atualizacao disponivel.");
+    }
+    els.btnCheckUpdate.disabled = true;
+    els.btnApplyUpdate.disabled = true;
+    setStatus(els.updateStatus, "Aplicando atualizacao. A aplicacao sera reiniciada ao final...");
+    const resp = await fetch("/api/update/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_version: updateState.targetVersion,
+        package_url: updateState.packageUrl,
+      }),
+    });
+    if (!resp.ok) {
+      const errorMessage = await parseApiError(resp, `Falha ao aplicar atualizacao (${resp.status})`);
+      throw new Error(errorMessage);
+    }
+    const data = await resp.json();
+    setStatus(els.updateStatus, data.message || "Atualizacao iniciada. Aguarde alguns segundos e reabra o aplicativo.");
+  } catch (err) {
+    setStatus(els.updateStatus, err.message, false);
+  } finally {
+    els.btnCheckUpdate.disabled = false;
+  }
+}
+
+async function loadVersionInfo() {
+  if (!els.appVersionInfo) {
+    return;
+  }
+  try {
+    const resp = await fetch("/api/version");
+    if (!resp.ok) {
+      els.appVersionInfo.textContent = "Versao indisponivel no momento";
+      return;
+    }
+    const data = await resp.json();
+    els.appVersionInfo.textContent = `Versao ${data.version || "desconhecida"} | Autor: Evandro C. Toniolo`;
+  } catch {
+    els.appVersionInfo.textContent = "Versao indisponivel no momento";
+  }
+}
+
+if (els.btnAddPole) {
+  els.btnAddPole.addEventListener("click", () => {
+    state.poles.push(ensurePoleDefaults({}, state.poles.length));
+    renderPolesTable();
+  });
+}
+
+if (els.btnAddCable) {
+  els.btnAddCable.addEventListener("click", () => {
+    state.cables.push(ensureCableDefaults({ Tipo: "BT", Desc: "", Qtd: 0 }));
+    renderCablesTable();
+  });
+}
+
+async function runCalculate() {
   try {
     collectPolesFromTable();
     collectCablesFromTable();
+    resetGateUi();
 
     setStatus(els.calcStatus, "Calculando BOM...");
+    els.bomTableBody.innerHTML = "";
+    els.validationBox.innerHTML = "";
+    els.structureAuditBox.innerHTML = "";
+    els.qualityGateBox.innerHTML = "";
+    els.recommendationsBox.innerHTML = "";
+    if (els.bomPoleTableBody) {
+      els.bomPoleTableBody.innerHTML = "";
+    }
+
     const resp = await fetch("/api/calculate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -258,41 +832,151 @@ els.btnCalculate.addEventListener("click", async () => {
     if (!resp.ok) throw new Error(data.detail || `Falha no calculo (${resp.status})`);
 
     state.bom = data.bom || [];
+    state.bomByPole = data.bom_by_pole || {};
+    state.structureAudit = data.structure_audit || null;
+    state.selectedBomPole = "";
     state.validation = data.validation || null;
+    state.recommendations = data.recommendations || [];
+    state.qualityGate = data.quality_gate || null;
 
     renderBom();
+    renderBomByPoleSelector();
+    renderBomByPole();
     renderValidation();
-    els.btnDownloadCsv.disabled = state.bom.length === 0;
-    els.btnDownloadPdf.disabled = state.bom.length === 0;
+    renderStructureAudit();
+    renderQualityGate();
+    renderRecommendations();
     setStatus(els.calcStatus, `BOM gerada com ${state.bom.length} itens.`);
   } catch (err) {
     setStatus(els.calcStatus, err.message, false);
   }
-});
+}
 
-els.btnDownloadCsv.addEventListener("click", async () => {
-  try {
-    await downloadFromEndpoint("/api/export/csv", { bom: state.bom }, "lista_materiais.csv");
-  } catch (err) {
-    setStatus(els.calcStatus, err.message, false);
-  }
-});
+if (els.btnExtract && els.pdfFile && APP_MODE === "programacao") {
+  els.btnExtract.addEventListener("click", async () => {
+    try {
+      const file = els.pdfFile.files[0];
+      if (!file) throw new Error("Selecione um PDF.");
 
-els.btnDownloadPdf.addEventListener("click", async () => {
-  try {
-    const project_info = {
-      Ordem: els.ordem.value || "",
-      Equipe: els.equipe.value || "",
-      Programador: els.programador.value || "",
-    };
-    const observacoes = els.observacoes.value || "";
-    await downloadFromEndpoint("/api/export/pdf", { bom: state.bom, project_info, observacoes }, "lista_materiais.pdf");
-  } catch (err) {
-    setStatus(els.calcStatus, err.message, false);
-  }
-});
+      setStatus(els.extractStatus, "Extraindo PDF...");
+      els.validationBox.innerHTML = "";
+      els.structureAuditBox.innerHTML = "";
+      els.qualityGateBox.innerHTML = "";
+      els.recommendationsBox.innerHTML = "";
+      const form = new FormData();
+      form.append("file", file);
+
+      let resp = await fetch("/api/extract", { method: "POST", body: form });
+      if (!resp.ok && resp.status >= 500) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        resp = await fetch("/api/extract", { method: "POST", body: form });
+      }
+      if (!resp.ok) {
+        const errorMessage = await parseApiError(resp, `Falha na extracao (${resp.status})`);
+        throw new Error(errorMessage);
+      }
+      const data = await resp.json();
+
+      state.poles = (data.poles || []).map((p, idx) => ensurePoleDefaults(p, idx));
+      state.cables = (data.cables || []).map((c) => ensureCableDefaults(c));
+      state.validation = null;
+      state.recommendations = [];
+      state.bom = [];
+      state.bomByPole = {};
+      state.structureAudit = null;
+      state.selectedBomPole = "";
+      state.qualityGate = null;
+      resetGateUi();
+
+      els.ordem.value = data.project_info?.Ordem || "";
+
+      renderPolesTable();
+      renderCablesTable();
+      renderBom();
+      renderBomByPoleSelector();
+      renderBomByPole();
+      renderValidation();
+      renderStructureAudit();
+      renderQualityGate();
+      renderRecommendations();
+      setStatus(
+        els.extractStatus,
+        `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos. Calculando BOM...`
+      );
+
+      await runCalculate();
+      setStatus(els.extractStatus, `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos.`);
+    } catch (err) {
+      setStatus(els.extractStatus, err.message, false);
+    }
+  });
+}
+
+if (els.btnCalculate) {
+  els.btnCalculate.addEventListener("click", runCalculate);
+}
+
+if (els.bomPoleSelect) {
+  els.bomPoleSelect.addEventListener("change", () => {
+    state.selectedBomPole = String(els.bomPoleSelect.value || "");
+    renderBomByPole();
+  });
+}
+
+if (els.btnDownloadCsv) {
+  els.btnDownloadCsv.addEventListener("click", async () => {
+    try {
+      await downloadFromEndpoint("/api/export/csv", getExportPayload(), "lista_materiais.csv");
+      setStatus(els.calcStatus, "CSV exportado com sucesso.");
+    } catch (err) {
+      setStatus(els.calcStatus, err.message, false);
+    }
+  });
+}
+
+if (els.btnDownloadPdf) {
+  els.btnDownloadPdf.addEventListener("click", async () => {
+    try {
+      const responsavel = (els.fiscal?.value || els.programador?.value || "").trim();
+      const project_info = {
+        Ordem: els.ordem.value || "",
+        Equipe: els.equipe.value || "",
+        Programador: responsavel,
+      };
+      const observacoes = els.observacoes.value || "";
+      await downloadFromEndpoint(
+        "/api/export/pdf",
+        getExportPayload({ project_info, observacoes }),
+        "lista_materiais.pdf"
+      );
+      setStatus(els.calcStatus, "PDF exportado com sucesso.");
+    } catch (err) {
+      setStatus(els.calcStatus, err.message, false);
+    }
+  });
+}
+
+if (els.btnCheckUpdate) {
+  els.btnCheckUpdate.addEventListener("click", checkForUpdates);
+}
+if (els.btnApplyUpdate) {
+  els.btnApplyUpdate.addEventListener("click", applyUpdate);
+}
+if (els.btnGoAsBuilt) {
+  els.btnGoAsBuilt.addEventListener("click", () => navigateWithVersion("/as-built"));
+}
+if (els.btnGoProgramacao) {
+  els.btnGoProgramacao.addEventListener("click", () => navigateWithVersion("/"));
+}
 
 state.poles = [ensurePoleDefaults({}, 0)];
 state.cables = [ensureCableDefaults({ Tipo: "BT", Desc: "", Qtd: 0 })];
+renderDatalist("structureHints", structureHints);
+renderDatalist("cableDescHints", CABLE_DESC_HINTS);
+refreshStructureHints();
 renderPolesTable();
 renderCablesTable();
+renderBomByPoleSelector();
+renderBomByPole();
+renderQualityGate();
+loadVersionInfo();

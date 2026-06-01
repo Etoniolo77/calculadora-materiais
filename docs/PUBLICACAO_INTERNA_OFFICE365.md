@@ -11,7 +11,6 @@ Publicar a Calculadora internamente (rede corporativa), sem migração de mainfr
 - IIS instalado com:
   - URL Rewrite
   - ARR (Application Request Routing)
-  - WebSocket habilitado
 - Acesso ao repositório em pasta local
 
 ## 3. Setup da aplicação
@@ -21,36 +20,32 @@ No diretório do projeto:
 .\scripts\setup_internal_publish.ps1
 ```
 
-## 4. Subir Streamlit local (backend de aplicação)
+## 4. Subir FastAPI local (backend de aplicação)
 ```powershell
-.\scripts\start_internal_streamlit.ps1 -BindAddress 127.0.0.1 -Port 8501
+.\scripts\start_internal_fastapi.ps1 -BindAddress 127.0.0.1 -Port 8600
 ```
 
 Verificar saúde:
 ```powershell
-.\scripts\healthcheck_internal_streamlit.ps1 -BindAddress 127.0.0.1 -Port 8501
+.\scripts\healthcheck_internal_fastapi.ps1 -BindAddress 127.0.0.1 -Port 8600
 ```
 
 Parar:
 ```powershell
-.\scripts\stop_internal_streamlit.ps1
+.\scripts\stop_internal_fastapi.ps1
 ```
 
 ## 5. IIS Reverse Proxy
 1. Criar um site no IIS (ex: `calculadora-interna`).
 2. Associar binding interno (ex: `https://calculadora.suaempresa.local`).
-3. Copiar o template [web.config.template](C:\Users\EvandroCesarToniolo\Projetos_Antigravity\02_PROJETOS\PRJ-13-Calculadora\deploy\iis\web.config.template) para a raiz do site como `web.config`.
+3. Copiar o template [web.fastapi.config.template](C:\Users\EvandroCesarToniolo\Projetos_Antigravity\02_PROJETOS\PRJ-13-Calculadora\deploy\iis\web.fastapi.config.template) para a raiz do site como `web.config`.
 4. Garantir que ARR está com proxy habilitado.
 5. Validar no navegador corporativo:
    - `https://calculadora.suaempresa.local`
 
 Automação opcional (PowerShell):
 ```powershell
-.\scripts\configure_iis_reverse_proxy.ps1 `
-  -SiteName "calculadora-interna" `
-  -SitePath "C:\inetpub\wwwroot\calculadora-interna" `
-  -Binding "*:443:calculadora.suaempresa.local" `
-  -CreateSiteIfMissing
+.\scripts\configure_iis_reverse_proxy_fastapi.ps1 -SitePath "C:\inetpub\wwwroot\calculadora-interna"
 ```
 
 ## 6. Publicar no Teams (Tab)
@@ -74,37 +69,20 @@ Para Copilot endpoint corporativo:
 - Gate de qualidade funcionando: OK
 - Exportação CSV/PDF funcionando: OK
 - Acesso via Teams Tab: OK
-- Logs sem erro crítico em `storage\streamlit.err.log`: OK
+- Logs sem erro crítico em `storage\fastapi.err.log`: OK
 
 ## 9. Operação diária
 - Start:
-  - `.\scripts\start_internal_streamlit.ps1`
-  - fallback sem venv: `.\scripts\start_internal_streamlit.ps1 -UseSystemPython`
+  - `.\scripts\start_internal_fastapi.ps1`
+  - fallback sem venv: `.\scripts\start_internal_fastapi.ps1 -UseSystemPython`
 - Stop:
-  - `.\scripts\stop_internal_streamlit.ps1`
+  - `.\scripts\stop_internal_fastapi.ps1`
 - Health:
-  - `.\scripts\healthcheck_internal_streamlit.ps1`
+  - `.\scripts\healthcheck_internal_fastapi.ps1`
 
 ## 10. Observações de ambiente
 - Em máquinas com hardening, `venv/ensurepip` pode falhar por política de permissão.
 - Nesses casos, usar fallback com Python global e manter o runtime validado.
 
----
-
-## 11. Opcao recomendada (sem WebSocket): FastAPI + HTML
-
-Quando houver instabilidade de renderizacao no Streamlit via IIS, usar stack FastAPI:
-
-```powershell
-.\scripts\start_internal_fastapi.ps1 -UseSystemPython
-.\scripts\healthcheck_internal_fastapi.ps1 -BindAddress 127.0.0.1 -Port 8600
-```
-
-Aplicar template IIS da FastAPI (PowerShell como administrador):
-
-```powershell
-.\scripts\configure_iis_reverse_proxy_fastapi.ps1 -SitePath "C:\inetpub\wwwroot\calculadora-local"
-```
-
-URL final:
+## 11. URL final
 - `http://localhost:8080`

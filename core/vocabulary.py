@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
+try:
+    from .project_paths import OFFICIAL_VOCAB_PATH
+except ImportError:
+    from project_paths import OFFICIAL_VOCAB_PATH  # type: ignore
+
 
 class VocabularyManager:
     """
@@ -100,7 +105,8 @@ class VocabularyManager:
     
     def __init__(self, base_dir: str = "."):
         self.base_dir = Path(base_dir)
-        self.vocab_path = self.base_dir / self.VOCAB_FILE
+        requested_path = self.base_dir / self.VOCAB_FILE
+        self.vocab_path = OFFICIAL_VOCAB_PATH if requested_path == Path(self.VOCAB_FILE) else requested_path
         
         # Carregar vocabulário
         self.synonyms: Dict[str, str] = {}
@@ -134,6 +140,7 @@ class VocabularyManager:
     def _save(self):
         """Persiste vocabulário em JSON"""
         try:
+            self.vocab_path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 'synonyms': self.synonyms,
                 'siglas': self.siglas,

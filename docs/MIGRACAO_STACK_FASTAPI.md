@@ -1,5 +1,7 @@
 # Migracao de Stack - Streamlit para FastAPI + HTML
 
+> Documento historico. Mantido apenas como registro da decisao de migracao. O runtime oficial atual do projeto e `FastAPI + frontend estatico`.
+
 Data: 2026-04-22
 Projeto: PRJ-13-Calculadora
 
