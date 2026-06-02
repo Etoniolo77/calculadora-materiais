@@ -455,7 +455,12 @@ function renderValidation() {
   }
   const v = state.validation;
   const issues = Array.isArray(v.issues) ? v.issues : [];
-  const issueItems = issues
+  const visibleIssues = issues.filter((issue) => {
+    const severity = String(issue.severity || "info").trim().toLowerCase();
+    const status = String(issue.status || "").trim().toLowerCase();
+    return !["ok", "success", "pass", "passed"].includes(severity) && !["ok", "success", "pass", "passed"].includes(status);
+  });
+  const issueItems = visibleIssues
     .map((issue) => {
       const severity = String(issue.severity || "info").toUpperCase();
       const message = escapeHtml(issue.message || "");
@@ -501,7 +506,15 @@ function renderStructureAudit() {
   }
 
   const summaryClass = audit.ok ? "ok" : "warn";
-  const polesHtml = audit.poles
+  const visiblePoles = audit.poles
+    .map((pole) => {
+      const details = Array.isArray(pole.details) ? pole.details : [];
+      const visibleDetails = details.filter((d) => !d.ok);
+      return { ...pole, details: visibleDetails };
+    })
+    .filter((pole) => !pole.ok || pole.details.length > 0);
+
+  const polesHtml = visiblePoles
     .map((pole) => {
       const poleStatus = pole.ok ? "ok" : "err";
       const details = Array.isArray(pole.details) ? pole.details : [];
@@ -548,6 +561,7 @@ function renderStructureAudit() {
       `;
     })
     .join("");
+  const auditContent = polesHtml || "<div class='audit-empty'>Nenhuma divergência de estrutura para exibir.</div>";
 
   els.structureAuditBox.innerHTML = `
     <div class="panel structure-audit-panel">
@@ -557,10 +571,10 @@ function renderStructureAudit() {
         <span class="metric-chip ok">Estruturas avaliadas: ${toInt(audit.total_structures, 0)}</span>
         <span class="metric-chip ${audit.mismatch_count > 0 ? "warn" : "ok"}">Ocorrências: ${toInt(
     audit.mismatch_count,
-    0
+        0
   )}</span>
       </div>
-      <div class="audit-poles-grid">${polesHtml}</div>
+      <div class="audit-poles-grid">${auditContent}</div>
     </div>
   `;
 }
