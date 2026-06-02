@@ -14,7 +14,14 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir | Out-Null
 }
 
-$runtimeDirs = @("backend", "core", "data", "frontend", "scripts", "storage", "update", "auth")
+$sourceBackendRuntime = Join-Path $projectRoot "backend_runtime"
+$installedBackendRuntime = Join-Path $InstallDir "backend_runtime"
+if ((-not (Test-Path $sourceBackendRuntime)) -and (Test-Path $installedBackendRuntime)) {
+    Write-Host "[INSTALL] Removendo backend_runtime antigo da instalacao fonte."
+    Remove-Item -LiteralPath $installedBackendRuntime -Recurse -Force
+}
+
+$runtimeDirs = @("backend_runtime", "backend", "core", "data", "frontend", "scripts", "storage", "update", "auth")
 $runtimeFiles = @("INICIAR_APP.cmd", "INSTALAR_APP.cmd", "app_version.json", "vocabulary.json")
 
 foreach ($dir in $runtimeDirs) {

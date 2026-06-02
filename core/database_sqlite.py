@@ -293,6 +293,7 @@ class SQLiteDatabaseLoader:
             ]
 
         materials = []
+        seen_materials = set()
         for est_row in estruturas:
             est_id = est_row[0]
 
@@ -306,6 +307,14 @@ class SQLiteDatabaseLoader:
             )
 
             for mat_row in cursor.fetchall():
+                dedupe_key = (
+                    str(mat_row[0] or "").strip(),
+                    str(mat_row[1] or "").strip(),
+                    float(mat_row[2] or 0),
+                )
+                if dedupe_key in seen_materials:
+                    continue
+                seen_materials.add(dedupe_key)
                 materials.append(
                     {
                         "code": mat_row[0],
@@ -313,9 +322,6 @@ class SQLiteDatabaseLoader:
                         "qty": mat_row[2],
                     }
                 )
-
-            if materials:
-                break
 
         if not materials:
             print(
