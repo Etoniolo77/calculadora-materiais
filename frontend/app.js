@@ -68,6 +68,7 @@ const els = {
   bomPoleTableBody: document.querySelector("#bomPoleTable tbody"),
   btnDownloadCsv: document.getElementById("btnDownloadCsv"),
   btnDownloadPdf: document.getElementById("btnDownloadPdf"),
+  btnSendWhatsapp: document.getElementById("btnSendWhatsapp"),
 };
 
 const updateState = {
@@ -266,6 +267,9 @@ function syncExportButtons() {
   const disabled = state.bom.length === 0 || gate.blocked;
   els.btnDownloadCsv.disabled = disabled;
   els.btnDownloadPdf.disabled = disabled;
+  if (els.btnSendWhatsapp) {
+    els.btnSendWhatsapp.disabled = disabled;
+  }
 }
 
 function resetGateUi() {
@@ -460,6 +464,14 @@ function renderValidation() {
     const status = String(issue.status || "").trim().toLowerCase();
     return !["ok", "success", "pass", "passed"].includes(severity) && !["ok", "success", "pass", "passed"].includes(status);
   });
+  const hasDivergence = visibleIssues.length > 0 || toInt(v.errors, 0) > 0 || toInt(v.warnings, 0) > 0;
+  if (!hasDivergence) {
+    els.validationBox.innerHTML = "";
+    return;
+  }
+  const metrics = [];
+  if (toInt(v.errors, 0) > 0) metrics.push(`<span class="metric-chip err">Erros: ${v.errors || 0}</span>`);
+  if (toInt(v.warnings, 0) > 0) metrics.push(`<span class="metric-chip warn">Avisos: ${v.warnings || 0}</span>`);
   const issueItems = visibleIssues
     .map((issue) => {
       const severity = String(issue.severity || "info").toUpperCase();
@@ -471,11 +483,7 @@ function renderValidation() {
   els.validationBox.innerHTML = `
     <div class="panel">
       <div class="panel-title">Validacao Tecnica</div>
-      <div class="metrics-row">
-        <span class="metric-chip ${v.errors > 0 ? "err" : "ok"}">Erros: ${v.errors || 0}</span>
-        <span class="metric-chip ${v.warnings > 0 ? "warn" : "ok"}">Avisos: ${v.warnings || 0}</span>
-        <span class="metric-chip ok">Infos: ${v.infos || 0}</span>
-      </div>
+      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
       ${issueItems ? `<ul class="issue-list">${issueItems}</ul>` : "<div>Nenhuma inconsistencia tecnica reportada.</div>"}
     </div>
   `;
@@ -513,6 +521,14 @@ function renderStructureAudit() {
       return { ...pole, details: visibleDetails };
     })
     .filter((pole) => !pole.ok || pole.details.length > 0);
+  const mismatchCount = toInt(audit.mismatch_count, 0);
+  if (visiblePoles.length === 0 && mismatchCount === 0 && audit.ok) {
+    els.structureAuditBox.innerHTML = "";
+    return;
+  }
+  const metrics = [];
+  if (!audit.ok) metrics.push(`<span class="metric-chip warn">Status: Divergências</span>`);
+  if (mismatchCount > 0) metrics.push(`<span class="metric-chip warn">Ocorrências: ${mismatchCount}</span>`);
 
   const polesHtml = visiblePoles
     .map((pole) => {
@@ -554,7 +570,7 @@ function renderStructureAudit() {
           <div class="audit-pole-head">
             <strong>${escapeHtml(pole.pole_id || "-")}</strong>
             <span>${escapeHtml(pole.pole_type || "-")}</span>
-            <span class="audit-badge ${poleStatus}">${pole.ok ? "OK" : "Com divergências"}</span>
+            ${pole.ok ? "" : `<span class="audit-badge ${poleStatus}">Com divergências</span>`}
           </div>
           <div class="audit-detail-list">${detailRows || "<div class='audit-empty'>Sem estruturas avaliadas.</div>"}</div>
         </div>
@@ -566,14 +582,7 @@ function renderStructureAudit() {
   els.structureAuditBox.innerHTML = `
     <div class="panel structure-audit-panel">
       <div class="panel-title">Conferência de Estruturas (Extração × Cálculo)</div>
-      <div class="metrics-row">
-        <span class="metric-chip ${summaryClass}">Status: ${audit.ok ? "OK" : "Divergências"}</span>
-        <span class="metric-chip ok">Estruturas avaliadas: ${toInt(audit.total_structures, 0)}</span>
-        <span class="metric-chip ${audit.mismatch_count > 0 ? "warn" : "ok"}">Ocorrências: ${toInt(
-    audit.mismatch_count,
-        0
-  )}</span>
-      </div>
+      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
       <div class="audit-poles-grid">${auditContent}</div>
     </div>
   `;
@@ -582,6 +591,17 @@ function renderStructureAudit() {
 function renderQualityGate() {
   const gate = buildGateState(state.qualityGate);
   if (!state.qualityGate && state.bom.length === 0) {
+    els.qualityGateBox.innerHTML = "";
+    syncExportButtons();
+    return;
+  }
+  const hasDivergence =
+    gate.blocked ||
+    gate.errors > 0 ||
+    gate.warnings > 0 ||
+    gate.verificar_count > 0 ||
+    gate.low_confidence_count > 0;
+  if (!hasDivergence) {
     els.qualityGateBox.innerHTML = "";
     syncExportButtons();
     return;
@@ -598,6 +618,12 @@ function renderQualityGate() {
     )
     .join("");
 
+  const metrics = [];
+  if (gate.errors > 0) metrics.push(`<span class="metric-chip err">Erros: ${gate.errors}</span>`);
+  if (gate.warnings > 0) metrics.push(`<span class="metric-chip warn">Avisos: ${gate.warnings}</span>`);
+  if (gate.verificar_count > 0) metrics.push(`<span class="metric-chip warn">VERIFICAR: ${gate.verificar_count}</span>`);
+  if (gate.low_confidence_count > 0) metrics.push(`<span class="metric-chip warn">Baixa confiança: ${gate.low_confidence_count}</span>`);
+
   let alertHtml = "";
   if (gate.blocked) {
     const messages = [];
@@ -609,20 +635,15 @@ function renderQualityGate() {
     }
     alertHtml = `<div class="gate-alert err">${messages.join(" ")}</div>`;
   } else if (gate.errors > 0 && gate.override_valid) {
-    alertHtml = `<div class="gate-alert ok">Exportação liberada por override justificado.</div>`;
+    alertHtml = `<div class="gate-alert warn">Exportação liberada por override justificado.</div>`;
   } else {
-    alertHtml = `<div class="gate-alert ok">Gate de qualidade liberado para exportação.</div>`;
+    alertHtml = "";
   }
 
   els.qualityGateBox.innerHTML = `
     <div class="panel">
       <div class="panel-title">Gate de Qualidade</div>
-      <div class="metrics-row">
-        <span class="metric-chip ${gate.errors > 0 ? "err" : "ok"}">Erros: ${gate.errors}</span>
-        <span class="metric-chip ${gate.warnings > 0 ? "warn" : "ok"}">Avisos: ${gate.warnings}</span>
-        <span class="metric-chip ${gate.verificar_count > 0 ? "warn" : "ok"}">VERIFICAR: ${gate.verificar_count}</span>
-        <span class="metric-chip ${gate.low_confidence_count > 0 ? "warn" : "ok"}">Baixa confiança: ${gate.low_confidence_count}</span>
-      </div>
+      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
       ${lowConfList
       ? `<div class="panel-title">Itens para revisão manual</div><ul class="low-conf-list">${lowConfList}</ul>`
       : ""
@@ -690,6 +711,11 @@ function renderQualityGate() {
 }
 
 async function downloadFromEndpoint(path, payload, filenameFallback) {
+  const { blob, filename } = await fetchExportBlob(path, payload, filenameFallback);
+  triggerBlobDownload(blob, filename);
+}
+
+async function fetchExportBlob(path, payload, filenameFallback) {
   const resp = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -707,14 +733,68 @@ async function downloadFromEndpoint(path, payload, filenameFallback) {
     throw new Error(message);
   }
   const blob = await resp.blob();
+  return { blob, filename: filenameFallback };
+}
+
+function triggerBlobDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filenameFallback;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function buildProjectInfo() {
+  const responsavel = (els.fiscal?.value || els.programador?.value || "").trim();
+  return {
+    Ordem: els.ordem.value || "",
+    Equipe: els.equipe.value || "",
+    Programador: responsavel,
+  };
+}
+
+function getPdfPayload() {
+  return getExportPayload({
+    project_info: buildProjectInfo(),
+    observacoes: els.observacoes.value || "",
+  });
+}
+
+function getDiagramIdentifier() {
+  const pdfName = String(els.pdfFile?.files?.[0]?.name || "").trim();
+  if (pdfName) {
+    return pdfName.replace(/\.pdf$/i, "");
+  }
+  return String(els.ordem?.value || "").trim() || "Nao informado";
+}
+
+function buildWhatsappMessage() {
+  const diagram = getDiagramIdentifier();
+  const equipe = String(els.equipe?.value || "").trim() || "Nao informada";
+  return `Segue lista de material em PDF.\nDiagrama: ${diagram}\nEquipe: ${equipe}`;
+}
+
+async function sendPdfViaWhatsapp() {
+  const message = buildWhatsappMessage();
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+  const { blob, filename } = await fetchExportBlob("/api/export/pdf", getPdfPayload(), "lista_materiais.pdf");
+  const pdfFile = new File([blob], filename, { type: "application/pdf" });
+
+  if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+    await navigator.share({
+      title: filename,
+      text: message,
+      files: [pdfFile],
+    });
+    return "WhatsApp acionado com PDF e mensagem.";
+  }
+
+  triggerBlobDownload(blob, filename);
+  window.open(whatsappUrl, "_blank", "noopener");
+  return "WhatsApp aberto com a mensagem pronta. O PDF foi baixado para anexo manual.";
 }
 
 async function parseApiError(resp, fallbackMessage) {
@@ -951,19 +1031,19 @@ if (els.btnDownloadCsv) {
 if (els.btnDownloadPdf) {
   els.btnDownloadPdf.addEventListener("click", async () => {
     try {
-      const responsavel = (els.fiscal?.value || els.programador?.value || "").trim();
-      const project_info = {
-        Ordem: els.ordem.value || "",
-        Equipe: els.equipe.value || "",
-        Programador: responsavel,
-      };
-      const observacoes = els.observacoes.value || "";
-      await downloadFromEndpoint(
-        "/api/export/pdf",
-        getExportPayload({ project_info, observacoes }),
-        "lista_materiais.pdf"
-      );
+      await downloadFromEndpoint("/api/export/pdf", getPdfPayload(), "lista_materiais.pdf");
       setStatus(els.calcStatus, "PDF exportado com sucesso.");
+    } catch (err) {
+      setStatus(els.calcStatus, err.message, false);
+    }
+  });
+}
+
+if (els.btnSendWhatsapp) {
+  els.btnSendWhatsapp.addEventListener("click", async () => {
+    try {
+      const statusText = await sendPdfViaWhatsapp();
+      setStatus(els.calcStatus, statusText);
     } catch (err) {
       setStatus(els.calcStatus, err.message, false);
     }

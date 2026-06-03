@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $versionPath = Join-Path $projectRoot "app_version.json"
 
 if (-not (Test-Path $versionPath)) {

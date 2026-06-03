@@ -7,6 +7,14 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
+try:
+    from .database_sqlite import DatabaseLoader
+except ImportError:
+    try:
+        from database_sqlite import DatabaseLoader  # type: ignore
+    except ImportError:
+        DatabaseLoader = None  # type: ignore
+
 
 class IssueSeverity(Enum):
     INFO = "info"
@@ -102,13 +110,16 @@ class TechnicalValidator:
     }
     
     # Estruturas que exigem poste DT
-    ESTRUTURAS_DT_OBRIGATORIO = {'M4', 'M6', 'CE4', 'TE4'}
+    ESTRUTURAS_DT_OBRIGATORIO = {'M4', 'M6', 'TE4'}
     
     # Estruturas que exigem poste circular
     ESTRUTURAS_CIRCULAR_OBRIGATORIO = {'N1', 'N2', 'N3', 'N4', 'B1', 'B2', 'B3', 'B4'}
+    _catalog_loader = None
+    _catalog_ready = False
     
     def __init__(self):
         self.issues: List[TechnicalIssue] = []
+        self.catalog_loader = self._get_catalog_loader()
     
     def validate(self, extraction: Dict) -> List[TechnicalIssue]:
         """
@@ -193,6 +204,30 @@ class TechnicalValidator:
         struct_clean = structure.replace('(R)', '').strip().upper()
         
         is_dt = pole_info.get('is_dt', False)
+        supported_types = self._get_supported_pole_types(struct_clean)
+
+        if supported_types:
+            wants_dt = "DT" in supported_types and "CIRCULAR" not in supported_types and "ALL" not in supported_types
+            wants_circular = "CIRCULAR" in supported_types and "DT" not in supported_types and "ALL" not in supported_types
+
+            if wants_dt and not is_dt:
+                self.issues.append(TechnicalIssue(
+                    code="COMP_001",
+                    message=f"Estrutura {struct_clean} requer poste DT, mas {pole_id} é circular",
+                    severity=IssueSeverity.ERROR,
+                    source=pole_id,
+                    suggestion="Substituir por poste tipo DT"
+                ))
+
+            if wants_circular and is_dt:
+                self.issues.append(TechnicalIssue(
+                    code="COMP_002",
+                    message=f"Estrutura {struct_clean} é típica de poste circular, mas {pole_id} é DT",
+                    severity=IssueSeverity.INFO,
+                    source=pole_id,
+                    suggestion="Verificar se estrutura está correta para DT"
+                ))
+            return
         
         if struct_clean in self.ESTRUTURAS_DT_OBRIGATORIO and not is_dt:
             self.issues.append(TechnicalIssue(
@@ -269,6 +304,33 @@ class TechnicalValidator:
         if match:
             return match.group(1)
         return None
+
+    @classmethod
+    def _get_catalog_loader(cls):
+        if cls._catalog_loader is not None:
+            return cls._catalog_loader
+        if DatabaseLoader is None:
+            return None
+        try:
+            loader = DatabaseLoader()
+            loader.load_all()
+            if loader.is_loaded:
+                cls._catalog_loader = loader
+                cls._catalog_ready = True
+                return cls._catalog_loader
+        except Exception:
+            pass
+        cls._catalog_ready = False
+        return None
+
+    def _get_supported_pole_types(self, structure_code: str) -> set[str]:
+        loader = self.catalog_loader
+        if not loader or not getattr(loader, "is_loaded", False):
+            return set()
+        try:
+            return set(loader.get_structure_supported_pole_types(structure_code))
+        except Exception:
+            return set()
     
     def get_summary(self) -> Dict:
         """Retorna resumo das validações"""

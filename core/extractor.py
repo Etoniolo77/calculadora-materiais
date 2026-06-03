@@ -311,6 +311,24 @@ class ProjectExtractor:
             return True
         return False
 
+    def _expand_structure_token(self, token: str) -> list[str]:
+        tk = str(token or "").strip().upper()
+        if not tk:
+            return []
+        match = re.match(r"^(\d+)(S\d)$", tk)
+        if match:
+            qty = int(match.group(1) or 0)
+            base = match.group(2)
+            if qty > 0:
+                return [base] * qty
+        return [tk]
+
+    def _expand_structure_list(self, items: list[str]) -> list[str]:
+        expanded = []
+        for item in items or []:
+            expanded.extend(self._expand_structure_token(item))
+        return expanded
+
     def _find_poles_from_boxes(self, page, page_num):
         """
         RULE-009: Extração de postes a partir de caixas retangulares.
@@ -427,7 +445,7 @@ class ProjectExtractor:
 
             # Dedupe mantendo ordem de leitura
             all_structs = []
-            for est in estruturas + sec_structs:
+            for est in self._expand_structure_list(estruturas + sec_structs):
                 if est not in all_structs:
                     all_structs.append(est)
             
@@ -454,6 +472,7 @@ class ProjectExtractor:
         pole_map = self.last_pole_map
         self.last_labeled_items = []
         labeled_items = self.last_labeled_items
+        exact_pole_anchors = []
         new_struct_lines = []
         typed_struct_lines = []
         # Modo estrito de revisão:
@@ -528,6 +547,7 @@ class ProjectExtractor:
             if len(text_line_poles) >= 2:
                 print(f"[LAYOUT] Fallback textual ativado ({len(text_line_poles)} postes)")
                 for pid in sorted(text_line_poles.keys(), key=lambda x: int(re.sub(r"\D", "", x) or "0")):
+                    text_line_poles[pid]["Est"] = self._expand_structure_list(text_line_poles[pid].get("Est", []))
                     pole_map[pid] = text_line_poles[pid]
                     pd = text_line_poles[pid]
                     print(f"  [TEXTO] {pid}: {pd['Pole']} | Est={pd['Est']} | Trafo={pd['Trafo']}")
@@ -801,6 +821,15 @@ class ProjectExtractor:
                 # NEW continua prioritário; EXISTING ajuda a completar poste novo.
                 for w in words:
                     txt = str(w.get("text", "")).upper().strip()
+                    exact_pid_match = re.fullmatch(r'P\s*0*(\d{1,2})', txt)
+                    if exact_pid_match:
+                        exact_pole_anchors.append(
+                            {
+                                "id": f"P{int(exact_pid_match.group(1))}",
+                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2),
+                                "state": w.get("state"),
+                            }
+                        )
                     pole_t = _extract_pole_type(txt)
                     if not pole_t:
                         continue
@@ -838,6 +867,16 @@ class ProjectExtractor:
                 s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ET\d+[A-Z]*|BR\d+|SMTR)', re.I)
                 trafo_regex = re.compile(r'(?:3\s*Ø\s*)?(\d+[,.]?\d*)\s*KVA', re.I)
 
+                def _is_metadata_noise(text: str) -> bool:
+                    txt = str(text or "").upper().strip()
+                    if not txt:
+                        return False
+                    if ".PDF" in txt or "\\" in txt or "/" in txt:
+                        return True
+                    if "CAMINHO DO PDF" in txt or "CAMINHODOPDF" in txt:
+                        return True
+                    return False
+
                 def _explode_struct_chain(token: str) -> list[str]:
                     """
                     Decompõe cadeias como 'N3F-S3-ESTAI' em estruturas individuais.
@@ -845,6 +884,8 @@ class ProjectExtractor:
                     """
                     t = str(token or "").upper().strip()
                     if not t:
+                        return []
+                    if _is_metadata_noise(t):
                         return []
                     parts = [p.strip() for p in re.split(r'[-]+', t) if p.strip()]
                     out = []
@@ -933,6 +974,8 @@ class ProjectExtractor:
                         for text in re.split(r'[,;+]+', safe_text):
                             text = text.replace('DOT', ',').strip()
                             if not text: continue
+                            if _is_metadata_noise(text):
+                                continue
                             pole_token = _extract_pole_type(text)
                             exploded_for_label = _explode_struct_chain(text)
                             is_est = (
@@ -1023,6 +1066,8 @@ class ProjectExtractor:
         # usa a linha NEW mais próxima que contém tipologia + estruturas.
         def _extract_structs_from_line(text: str) -> list[str]:
             txt = str(text or "").upper()
+            if _is_metadata_noise(txt):
+                return []
             out = []
             # Multiplicidade explícita (ex.: 2X[B2F], 2XB2F)
             for m in re.finditer(r'(\d+)\s*[X]\s*\[?\s*([A-Z]{1,3}\d+[A-Z0-9]*)\s*\]?', txt, re.I):
@@ -1046,6 +1091,8 @@ class ProjectExtractor:
             for tk in tokens:
                 tk = tk.strip()
                 if not tk:
+                    continue
+                if _is_metadata_noise(tk):
                     continue
                 tk = re.sub(r"\(\d+\)$", "", tk)
                 if _extract_pole_type(tk):
@@ -1168,6 +1215,7 @@ class ProjectExtractor:
                                 data.setdefault('Est', []).append(est)
 
             if include:
+                data['Est'] = self._expand_structure_list(data.get('Est', []))
                 # Marcar tipo como EXISTING se não foi confirmado como NEW
                 if not is_new_pole and not is_type_new and has_type:
                     pole_raw = data['Pole']
@@ -1241,6 +1289,72 @@ class ProjectExtractor:
                         if top_ratio >= 0.7:
                             for pid in unknown_ids:
                                 cleaned_map[pid]['Pole'] = top_type
+
+        if not cleaned_map and exact_pole_anchors and labeled_items:
+            fallback_map = {}
+            seen_ids = set()
+            for anchor in sorted(exact_pole_anchors, key=lambda item: (item["pos"][1], item["pos"][0])):
+                p_id = anchor["id"]
+                if p_id in seen_ids:
+                    continue
+                seen_ids.add(p_id)
+
+                px, py = anchor["pos"]
+                pole_type = "Desconhecido"
+                trafo_desc = None
+                ests = []
+
+                nearest_type = None
+                nearest_type_dist = 999999999.0
+                nearest_trafo = None
+                nearest_trafo_dist = 999999999.0
+                est_candidates = []
+
+                for item in labeled_items:
+                    item_type = item.get("type")
+                    if item_type not in {"TYPE", "EST", "TRAFO"}:
+                        continue
+                    if item.get("state") == "REMOVAL":
+                        continue
+
+                    ix, iy = item["pos"]
+                    dist = (px - ix) ** 2 + (py - iy) ** 2
+
+                    if item_type == "TYPE":
+                        extracted_type = _extract_pole_type(item.get("text", ""))
+                        if extracted_type and dist < nearest_type_dist:
+                            nearest_type = extracted_type
+                            nearest_type_dist = dist
+                    elif item_type == "TRAFO":
+                        kva_match = trafo_regex.search(item.get("text", ""))
+                        if kva_match and dist < nearest_trafo_dist:
+                            kva = kva_match.group(1).replace(",", ".")
+                            prefix = "MONO" if float(kva) <= 37.5 else "TRI"
+                            nearest_trafo = f"{prefix}-{kva}kVA"
+                            nearest_trafo_dist = dist
+                    elif item_type == "EST":
+                        if dist <= 160000:
+                            est_candidates.append((dist, item.get("text", "")))
+
+                if nearest_type:
+                    pole_type = nearest_type
+                if nearest_trafo:
+                    trafo_desc = nearest_trafo
+
+                for _, est_text in sorted(est_candidates, key=lambda item: item[0])[:6]:
+                    for est_code in _extract_structs_from_line(est_text):
+                        if est_code not in ests:
+                            ests.append(est_code)
+
+                if pole_type != "Desconhecido" or ests or trafo_desc:
+                    fallback_map[p_id] = {
+                        "Pole": pole_type,
+                        "Est": self._expand_structure_list(ests),
+                        "Trafo": trafo_desc,
+                    }
+
+            if fallback_map:
+                cleaned_map = fallback_map
 
         # Vincular códigos ESTF/ET aos postes com trafo para consumo no engine.
         def _assign_codes_by_text_proximity(prefix: str, codes: list[str], target_ids: list[str]) -> dict[str, list[str]]:

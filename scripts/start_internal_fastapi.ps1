@@ -2,7 +2,7 @@ param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$BindAddress = "127.0.0.1",
     [int]$Port = 8600,
-    [int]$HealthTimeoutSec = 20,
+    [int]$HealthTimeoutSec = 60,
     [switch]$WaitForHealth,
     [switch]$UseSystemPython,
     [string]$PythonCmd = "py"

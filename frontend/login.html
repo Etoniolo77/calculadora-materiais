@@ -3,39 +3,395 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Login Corporativo - Calculadora de Materiais</title>
-  <link rel="stylesheet" href="/frontend/styles.css?v=__APP_VERSION__" />
+  <title>Acesso Corporativo - Calculadora de Materiais</title>
+  <style>
+    :root {
+      --bg-color: #f3f6fa;
+      --card-bg: #ffffff;
+      --border-color: #d1d5db;
+      --text-main: #111827;
+      --text-muted: #4b5563;
+      --accent: #0f766e;
+      --accent-hover: #0d5e58;
+      --success: #166534;
+      --error: #b91c1c;
+      --font-sans: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-color);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow-x: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 440px;
+      position: relative;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 32px 24px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    /* Tabs navigation */
+    .tabs {
+      display: flex;
+      background: #f1f5f9;
+      border: 1px solid var(--border-color);
+      padding: 4px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 8px;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    /* Form Styles */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    input {
+      width: 100%;
+      background: #ffffff;
+      border: 1px solid #9ca3af;
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      transition: all 0.2s ease;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
+    }
+
+    .status-msg {
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .status-msg.err {
+      display: block;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: var(--error);
+    }
+
+    .status-msg.ok {
+      display: block;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: var(--success);
+    }
+
+    .btn-submit {
+      width: 100%;
+      background: var(--accent);
+      color: #ffffff;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 11px 16px;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-submit:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    .btn-submit:disabled {
+      background: #9ca3af;
+      border-color: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    .loader {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: none;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .footer-info {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  </style>
+  
+  <!-- Supabase JS Client Library -->
+  <script src="/frontend/supabase.min.js"></script>
 </head>
 <body>
-  <main class="container">
-    <section class="card" style="max-width: 560px; margin: 40px auto;">
-      <h1>Calculadora de Materiais</h1>
-      <p class="subtitle">Acesso permitido apenas com e-mail corporativo + PIN.</p>
-      <p id="loginInfo" class="status"></p>
-      <form method="post" action="/auth/local-login" style="margin-top: 10px;">
-        <label>E-mail corporativo
-          <input type="text" name="email" placeholder="seu.nome@eletromarquez.com.br" />
-        </label>
-        <label style="margin-top: 8px;">PIN de acesso
-          <input type="password" name="pin" placeholder="PIN corporativo" />
-        </label>
-        <div class="row" style="margin-top: 10px;">
-          <button type="submit" class="btnSecondary">Entrar</button>
+
+  <div class="container">
+
+    <main class="card">
+      <div class="header">
+        <h1>Calculadora BOM</h1>
+        <p class="subtitle" id="formSubtitle">Acesse com sua conta corporativa</p>
+      </div>
+
+      <div class="tabs">
+        <button type="button" class="tab-btn active" id="tabLogin" onclick="switchTab('login')">Entrar</button>
+        <button type="button" class="tab-btn" id="tabRegister" onclick="switchTab('register')">Criar Conta</button>
+      </div>
+
+      <div id="statusBox" class="status-msg"></div>
+
+      <form id="authForm" onsubmit="handleSubmit(event)">
+        <div class="form-group">
+          <label for="email">E-mail corporativo</label>
+          <div class="input-wrapper">
+            <input type="email" id="email" required placeholder="nome.sobrenome@eletromarquez.com.br" />
+          </div>
         </div>
+
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <div class="input-wrapper">
+            <input type="password" id="password" required placeholder="••••••••" minlength="6" />
+          </div>
+        </div>
+
+        <button type="submit" id="btnSubmit" class="btn-submit">
+          <span class="loader" id="btnLoader"></span>
+          <span id="btnText">Acessar Sistema</span>
+        </button>
       </form>
-    </section>
-  </main>
+
+      <div class="footer-info">
+        Calculadora de Materiais v__APP_VERSION__ | Eletromarquez
+      </div>
+    </main>
+  </div>
+
   <script>
-    const info = document.getElementById("loginInfo");
-    const params = new URLSearchParams(window.location.search);
-    const err = params.get("error");
-    if (err) {
-      info.textContent = decodeURIComponent(err);
-      info.className = "status err";
-    } else {
-      info.textContent = "Use seu e-mail corporativo e o PIN de acesso.";
-      info.className = "status ok";
+    let activeTab = 'login';
+    let supabaseClient = null;
+    const ALLOWED_DOMAIN = 'eletromarquez.com.br';
+
+    const statusBox = document.getElementById("statusBox");
+    const formSubtitle = document.getElementById("formSubtitle");
+    const tabLogin = document.getElementById("tabLogin");
+    const tabRegister = document.getElementById("tabRegister");
+    const btnSubmit = document.getElementById("btnSubmit");
+    const btnLoader = document.getElementById("btnLoader");
+    const btnText = document.getElementById("btnText");
+    const authForm = document.getElementById("authForm");
+
+    // Inicializar cliente Supabase consultando as credenciais no backend
+    async function initSupabase() {
+      try {
+        const resp = await fetch("/api/config");
+        if (!resp.ok) throw new Error("Erro ao ler credenciais do servidor.");
+        const config = await resp.json();
+        
+        if (!config.supabase_url || !config.supabase_anon_key) {
+          showStatus("Configuração do Supabase ausente no servidor. Verifique o arquivo .env.", false);
+          btnSubmit.disabled = true;
+          return;
+        }
+
+        // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente
+        supabaseClient = supabase.createClient(config.supabase_url, config.supabase_anon_key);
+      } catch (err) {
+        showStatus("Erro de inicialização: " + err.message, false);
+        btnSubmit.disabled = true;
+      }
     }
+
+    function showStatus(msg, ok = true) {
+      statusBox.textContent = msg;
+      statusBox.className = ok ? "status-msg ok" : "status-msg err";
+      statusBox.style.display = 'block';
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      statusBox.style.display = 'none';
+      if (tab === 'login') {
+        tabLogin.classList.add('active');
+        tabRegister.classList.remove('active');
+        formSubtitle.textContent = "Acesse com sua conta corporativa";
+        btnText.textContent = "Acessar Sistema";
+      } else {
+        tabLogin.classList.remove('active');
+        tabRegister.classList.add('active');
+        formSubtitle.textContent = "Registre sua conta com o e-mail corporativo";
+        btnText.textContent = "Cadastrar Conta";
+      }
+    }
+
+    function validateDomain(email) {
+      if (!email.includes('@')) return false;
+      const domain = email.split('@')[1].trim().toLowerCase();
+      return domain === ALLOWED_DOMAIN;
+    }
+
+    async function handleSubmit(event) {
+      event.preventDefault();
+      if (!supabaseClient) {
+        showStatus("Supabase não foi inicializado corretamente.", false);
+        return;
+      }
+
+      const email = document.getElementById("email").value.trim().toLowerCase();
+      const password = document.getElementById("password").value;
+
+      // Validação rápida de domínio no cliente
+      if (!validateDomain(email)) {
+        showStatus(`Acesso restrito. Utilize seu e-mail corporativo @${ALLOWED_DOMAIN}`, false);
+        return;
+      }
+
+      // Ativar loader
+      btnSubmit.disabled = true;
+      btnLoader.style.display = 'inline-block';
+      statusBox.style.display = 'none';
+
+      try {
+        if (activeTab === 'login') {
+          // Realizar login no Supabase
+          const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+          if (error) throw error;
+
+          // Enviar token ao backend para fixar cookie seguro de sessão
+          const sessionResp = await fetch("/auth/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: data.session.access_token })
+          });
+
+          if (!sessionResp.ok) {
+            const errData = await sessionResp.json();
+            throw new Error(errData.detail || "Falha ao registrar sessão no backend.");
+          }
+
+          // Redirecionar ao index
+          showStatus("Acesso autorizado! Redirecionando...", true);
+          setTimeout(() => {
+            window.location.href = "/";
+          }, 800);
+
+        } else {
+          // Criar conta no Supabase
+          const { data, error } = await supabaseClient.auth.signUp({ email, password });
+          if (error) throw error;
+
+          showStatus("Conta criada! Verifique seu e-mail corporativo para confirmar a ativação.", true);
+          authForm.reset();
+        }
+      } catch (err) {
+        showStatus(err.message, false);
+        btnSubmit.disabled = false;
+        btnLoader.style.display = 'none';
+      }
+    }
+
+    // Inicialização da página
+    initSupabase();
   </script>
 </body>
 </html>

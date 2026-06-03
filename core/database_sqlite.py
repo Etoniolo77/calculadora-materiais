@@ -1,48 +1,69 @@
 """
-Database Loader - Versão SQLite (runtime oficial)
-
-IMPORTANTE:
-- Runtime da calculadora lê SEMPRE do banco oficial: data/materials.db
-- Excel é somente fonte de alimentação do banco (scripts de atualização),
-  não fonte direta de runtime.
+Database Loader - Versão Supabase PostgreSQL (Ponte de Compatibilidade)
+Substitui o database_sqlite.py anterior para conectar ao Supabase na nuvem.
 """
 
 from __future__ import annotations
 
-import csv
+import os
 import json
 import math
-import sqlite3
+import psycopg2
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from dotenv import load_dotenv
 
 try:
-    from .project_paths import OFFICIAL_DB_PATH, OFFICIAL_UNIFIED_DB_PATH
+    from .project_paths import OFFICIAL_UNIFIED_DB_PATH, BACKEND_DIR
 except ImportError:
-    from project_paths import OFFICIAL_DB_PATH, OFFICIAL_UNIFIED_DB_PATH  # type: ignore
+    from project_paths import OFFICIAL_UNIFIED_DB_PATH, BACKEND_DIR  # type: ignore
+
+# Carregar variáveis do .env do backend
+ENV_PATH = BACKEND_DIR / ".env"
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
+
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL")
 
 
 class SAPCodesProxy:
-    """Proxy que simula dicionário usando queries SQL."""
+    """Proxy que simula dicionário usando queries SQL no PostgreSQL."""
 
-    def __init__(self, conn: sqlite3.Connection):
-        self.conn = conn
+    def __init__(self, loader: SupabaseDatabaseLoader):
+        self.loader = loader
 
     def __contains__(self, code: str) -> bool:
-        cursor = self.conn.execute(
-            "SELECT 1 FROM materiais WHERE codigo = ? LIMIT 1",
-            (str(code),),
-        )
-        return cursor.fetchone() is not None
+        conn = self.loader.get_conn()
+        if not conn:
+            return False
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM materiais WHERE codigo = %s LIMIT 1",
+                    (str(code),),
+                )
+                return cursor.fetchone() is not None
+        except Exception as e:
+            print(f"[Supabase] Erro em __contains__: {e}")
+            return False
 
     def __getitem__(self, code: str) -> str:
-        cursor = self.conn.execute(
-            "SELECT descricao FROM materiais WHERE codigo = ?",
-            (str(code),),
-        )
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-        raise KeyError(code)
+        conn = self.loader.get_conn()
+        if not conn:
+            raise KeyError(code)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT descricao FROM materiais WHERE codigo = %s",
+                    (str(code),),
+                )
+                result = cursor.fetchone()
+                if result:
+                    return result[0]
+            raise KeyError(code)
+        except Exception as e:
+            print(f"[Supabase] Erro em __getitem__: {e}")
+            raise KeyError(code)
 
     def get(self, code: str, default: str = None) -> str:
         try:
@@ -51,59 +72,98 @@ class SAPCodesProxy:
             return default
 
     def keys(self):
-        cursor = self.conn.execute("SELECT codigo FROM materiais")
-        return [row[0] for row in cursor.fetchall()]
+        conn = self.loader.get_conn()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT codigo FROM materiais")
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[Supabase] Erro em keys(): {e}")
+            return []
 
     def values(self):
-        cursor = self.conn.execute("SELECT descricao FROM materiais")
-        return [row[0] for row in cursor.fetchall()]
+        conn = self.loader.get_conn()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT descricao FROM materiais")
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[Supabase] Erro em values(): {e}")
+            return []
 
     def items(self):
-        cursor = self.conn.execute("SELECT codigo, descricao FROM materiais")
-        return list(cursor.fetchall())
+        conn = self.loader.get_conn()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT codigo, descricao FROM materiais")
+                return list(cursor.fetchall())
+        except Exception as e:
+            print(f"[Supabase] Erro em items(): {e}")
+            return []
 
 
-class SQLiteDatabaseLoader:
-    """Carregador de banco usando SQLite com fonte oficial fixa em data/materials.db."""
+class SupabaseDatabaseLoader:
+    """Carregador de banco usando PostgreSQL hospedado no Supabase."""
 
     def __init__(self, base_dir: str = "."):
-        self.db_path = OFFICIAL_DB_PATH
+        self.conn_str = SUPABASE_DB_URL
         self.unified_path = OFFICIAL_UNIFIED_DB_PATH
-        self.conn: Optional[sqlite3.Connection] = None
+        self._conn: Optional[psycopg2.connection] = None
         self.is_loaded = False
         self._sap_proxy = None
         self.unified_db = None
-        self._csv_structures_cache: Dict[str, List[Dict]] = {}
+
+    def get_conn(self) -> Optional[psycopg2.connection]:
+        """Garante e retorna uma conexão ativa e saudável com o Postgres."""
+        if self._conn is None or self._conn.closed:
+            # Recarregar do ambiente caso tenha mudado
+            env_str = os.environ.get("SUPABASE_DB_URL")
+            if env_str:
+                self.conn_str = env_str
+            
+            if not self.conn_str or "SEU_PROJETO" in self.conn_str:
+                return None
+            try:
+                self._conn = psycopg2.connect(self.conn_str)
+                self._conn.autocommit = True
+            except Exception as e:
+                print(f"[Supabase] Erro ao conectar ao Postgres: {e}")
+                self._conn = None
+        return self._conn
 
     @property
     def sap_codes(self):
-        if self._sap_proxy is None and self.conn:
-            self._sap_proxy = SAPCodesProxy(self.conn)
-        return self._sap_proxy if self._sap_proxy else {}
+        if self._sap_proxy is None:
+            self._sap_proxy = SAPCodesProxy(self)
+        return self._sap_proxy
 
     def load_all(self, force_legacy: bool = False) -> None:
-        """Conecta ao banco SQLite oficial e carrega metadados complementares."""
-        if not self.db_path.exists():
-            print(f"[ERRO] Banco SQLite oficial não encontrado: {self.db_path}")
-            print("  Execute: python scripts/update_and_sync_materials.py")
+        """Verifica conexão com Supabase e carrega unified_db local."""
+        conn = self.get_conn()
+        if not conn:
             self.is_loaded = False
             return
 
         try:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM materiais")
+                mat_count = cursor.fetchone()[0]
 
-            cursor = self.conn.execute("SELECT COUNT(*) FROM materiais")
-            mat_count = cursor.fetchone()[0]
-
-            cursor = self.conn.execute("SELECT COUNT(*) FROM estruturas")
-            est_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM estruturas")
+                est_count = cursor.fetchone()[0]
 
             print(
-                "[OK] SQLite oficial conectado: "
-                f"{mat_count} materiais, {est_count} estruturas ({self.db_path})"
+                "[OK] Supabase PostgreSQL conectado: "
+                f"{mat_count} materiais, {est_count} estruturas."
             )
 
+            # Carregar o unified_db local
             if self.unified_path.exists() and self.unified_path.stat().st_size > 0:
                 with open(self.unified_path, "r", encoding="utf-8") as f:
                     self.unified_db = json.load(f)
@@ -114,120 +174,147 @@ class SQLiteDatabaseLoader:
 
             self.is_loaded = True
         except Exception as e:
-            print(f"Erro ao conectar SQLite: {e}")
+            print(f"[Supabase] Erro ao carregar dados: {e}")
             self.is_loaded = False
 
     def get_sap_description(self, code: str) -> str:
         """Retorna descrição do código SAP."""
-        if not self.conn:
+        conn = self.get_conn()
+        if not conn:
             return f"SAP {code}"
 
-        cursor = self.conn.execute(
-            "SELECT descricao FROM materiais WHERE codigo = ?",
-            (str(code),),
-        )
-        result = cursor.fetchone()
-        return result[0] if result else f"SAP {code}"
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT descricao FROM materiais WHERE codigo = %s",
+                    (str(code),),
+                )
+                result = cursor.fetchone()
+                return result[0] if result else f"SAP {code}"
+        except Exception as e:
+            print(f"[Supabase] Erro em get_sap_description: {e}")
+            return f"SAP {code}"
 
     def find_material_by_description(
         self, search_terms, limit: int = 5, exclude_terms: List[str] = None
-    ) -> List[Tuple[str, str, int]]:
+    ) -> List[Tuple[str, str, float]]:
         """
-        Busca materiais por termos na descrição usando FTS5.
+        Busca materiais por termos na descrição usando pg_trgm (similaridade e ILIKE) no Postgres.
         Retorna lista de tuplas (codigo, descricao, score).
+        Tenta busca estrita com AND primeiro, e caso não encontre nada, tenta OR com filtragem de termos essenciais.
         """
-        if not self.conn:
+        conn = self.get_conn()
+        if not conn:
             return []
 
         if isinstance(search_terms, str):
             search_terms = [search_terms]
 
-        terms_upper = [t.upper() for t in search_terms]
         exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
 
-        def _apply_filters(rows):
-            out = []
-            for row in rows:
-                desc_upper = row[1].upper()
-                if any(ex in desc_upper for ex in exclude_upper):
-                    continue
-                if str(row[0]).startswith("9"):
-                    continue
-                out.append(row)
-            return out
+        # Construir cláusulas WHERE baseadas em ILIKE para filtrar os termos obrigatórios
+        query_parts = []
+        params = []
 
-        def _idf_score(desc_upper: str, idf_map: dict) -> float:
-            base = sum(idf_map.get(t, 0.5) for t in terms_upper if t in desc_upper)
-            length_penalty = 1.0 / (1.0 + len(desc_upper) / 200.0)
-            return base * length_penalty
+        for term in search_terms:
+            query_parts.append("descricao ILIKE %s")
+            params.append(f"%{term}%")
+
+        if not query_parts:
+            return []
+
+        where_clause = " AND ".join(query_parts)
+
+        # Tratar exclusões
+        if exclude_upper:
+            for ex in exclude_upper:
+                where_clause += " AND descricao NOT ILIKE %s"
+                params.append(f"%{ex}%")
+
+        # Excluir materiais de teste que iniciam com 9
+        where_clause += " AND codigo NOT LIKE '9%%'"
+
+        # Termo base para calcular o score de similaridade (pg_trgm)
+        base_term = " ".join(search_terms)
+        query_params = [base_term] + params + [limit]
+
+        query = f"""
+            SELECT codigo, descricao, similarity(descricao, %s) as score
+            FROM materiais
+            WHERE {where_clause}
+            ORDER BY score DESC, descricao
+            LIMIT %s
+        """
 
         try:
-            and_query = " AND ".join([f'"{t}"*' for t in search_terms])
-            cursor = self.conn.execute(
-                "SELECT codigo, descricao FROM materiais_fts WHERE materiais_fts MATCH ? LIMIT 500",
-                (and_query,),
-            )
-            rows = _apply_filters(cursor.fetchall())
-
-            if not rows:
-                or_query = " OR ".join([f'"{t}"*' for t in search_terms])
-                cursor = self.conn.execute(
-                    "SELECT codigo, descricao FROM materiais_fts WHERE materiais_fts MATCH ? LIMIT 1000",
-                    (or_query,),
-                )
-                rows = _apply_filters(cursor.fetchall())
-
-            if not rows:
-                return []
-
-            n_docs = len(rows)
-            idf_map = {}
-            for term in terms_upper:
-                df = sum(1 for r in rows if term in r[1].upper())
-                idf_map[term] = math.log((n_docs + 1) / (df + 1)) + 1.0
-
-            scored = [
-                (row[0], row[1], _idf_score(row[1].upper(), idf_map)) for row in rows
-            ]
-            scored.sort(key=lambda x: x[2], reverse=True)
-            return scored[:limit]
-
+            with conn.cursor() as cursor:
+                cursor.execute(query, query_params)
+                rows = cursor.fetchall()
+                if rows:
+                    return [(r[0], r[1], float(r[2] or 0)) for r in rows]
         except Exception as e:
-            print(f"Erro na busca FTS: {e}")
-            return self._fallback_search(search_terms, limit, exclude_terms)
+            print(f"[Supabase] Erro na busca estrita com pg_trgm: {e}")
+            return []
 
-    def _fallback_search(
-        self, search_terms: List[str], limit: int, exclude_terms: List[str] = None
-    ) -> List[Tuple[str, str, int]]:
-        """Busca fallback sem FTS."""
-        cursor = self.conn.execute("SELECT codigo, descricao FROM materiais")
-        results = []
+        # Fallback para OR caso a busca estrita com AND não retorne resultados
+        or_where = "(" + " OR ".join(query_parts) + ")"
+        if exclude_upper:
+            for ex in exclude_upper:
+                or_where += " AND descricao NOT ILIKE %s"
+        or_where += " AND codigo NOT LIKE '9%%'"
 
-        exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
+        # Aumentamos o limite da busca OR para filtrar depois via termos essenciais
+        query_params_or = [base_term] + params + [limit * 10]
+        query_or = f"""
+            SELECT codigo, descricao, similarity(descricao, %s) as score
+            FROM materiais
+            WHERE {or_where}
+            ORDER BY score DESC, descricao
+            LIMIT %s
+        """
 
-        for row in cursor.fetchall():
-            desc_upper = row[1].upper()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query_or, query_params_or)
+                rows = cursor.fetchall()
+        except Exception as e:
+            print(f"[Supabase] Erro na busca fallback OR com pg_trgm: {e}")
+            return []
 
-            if any(ex in desc_upper for ex in exclude_upper):
-                continue
-            if str(row[0]).startswith("9"):
-                continue
+        # Filtrar linhas pelos termos essenciais (ex. '15KVA', '12M', '300DAN')
+        import re
+        essential_patterns = [
+            re.compile(r"^\d+(?:\.\d+)?KVA$", re.I),
+            re.compile(r"^\d+M$", re.I),
+            re.compile(r"^\d+DAN$", re.I),
+            re.compile(r"^\d+MM2$", re.I),
+            re.compile(r"^(?:HV|KV)$", re.I)
+        ]
+        essential_terms = []
+        for term in search_terms:
+            for pattern in essential_patterns:
+                if pattern.match(term):
+                    essential_terms.append(term.upper())
+                    break
 
-            score = sum(1 for term in search_terms if term.upper() in desc_upper)
-            if score > 0:
-                results.append((row[0], row[1], score))
+        if essential_terms:
+            filtered_rows = []
+            for r in rows:
+                desc_normalized = r[1].upper().replace(" ", "")
+                if all(et in desc_normalized for et in essential_terms):
+                    filtered_rows.append(r)
+            rows = filtered_rows
 
-        results.sort(key=lambda x: x[2], reverse=True)
-        return results[:limit]
+        return [(r[0], r[1], float(r[2] or 0)) for r in rows[:limit]]
 
     def explode_structure(
         self, structure_code: str, nivel: int = 1, pole_type_str: str = ""
     ) -> List[Dict]:
         """
         Retorna lista de materiais para uma estrutura, filtrada por tipo de poste.
-        Sem fallback em tabelas legadas de BOM.
         """
-        if not self.conn:
+        conn = self.get_conn()
+        if not conn:
             return [
                 {
                     "code": "VERIFICAR",
@@ -250,182 +337,216 @@ class SQLiteDatabaseLoader:
 
         tipo_filtro = "DT" if is_dt else "CIRCULAR"
 
-        cursor = self.conn.execute(
-            """
-            SELECT e.id, e.tipo_poste
-            FROM estruturas e
-            WHERE e.codigo = ? AND (e.tipo_poste = ? OR e.tipo_poste = 'ALL')
-            ORDER BY CASE WHEN e.tipo_poste = ? THEN 0 ELSE 1 END
-            """,
-            (structure_code, tipo_filtro, tipo_filtro),
-        )
-
-        estruturas = cursor.fetchall()
-
-        if not estruturas:
-            cursor = self.conn.execute(
-                "SELECT id FROM estruturas WHERE codigo = ?",
-                (structure_code,),
-            )
-            estruturas = cursor.fetchall()
-
-        if not estruturas:
-            csv_fallback = self._explode_structure_from_csv(
-                structure_code,
-                pole_type_str=pole_type_str,
-                is_dt=is_dt,
-            )
-            if csv_fallback:
-                print(
-                    f"[FALLBACK-CSV] Estrutura {structure_code} carregada da lista consolidada"
+        try:
+            with conn.cursor() as cursor:
+                # Busca estruturas que correspondem ao código e tipo de poste
+                cursor.execute(
+                    """
+                    SELECT id, tipo_poste
+                    FROM estruturas
+                    WHERE codigo = %s AND (tipo_poste = %s OR tipo_poste = 'ALL')
+                    ORDER BY CASE WHEN tipo_poste = %s THEN 0 ELSE 1 END
+                    """,
+                    (structure_code, tipo_filtro, tipo_filtro),
                 )
-                return csv_fallback
+                estruturas = cursor.fetchall()
 
-            print(
-                f"[AVISO] Estrutura {structure_code} não encontrada no SQLite oficial"
-            )
+                # Fallback: se não achar com filtro, tenta achar qualquer uma com esse código
+                if not estruturas:
+                    cursor.execute(
+                        "SELECT id FROM estruturas WHERE codigo = %s",
+                        (structure_code,),
+                    )
+                    estruturas = cursor.fetchall()
+
+                if not estruturas:
+                    print(
+                        f"[AVISO] Estrutura {structure_code} não encontrada no Supabase"
+                    )
+                    return [
+                        {
+                            "code": "VERIFICAR",
+                            "desc": f"VERIFICAR ESTRUTURA {structure_code}",
+                            "qty": 1,
+                        }
+                    ]
+
+                materials = []
+                seen_materials = set()
+                
+                for est_row in estruturas:
+                    est_id = est_row[0]
+
+                    cursor.execute(
+                        """
+                        SELECT material_codigo, material_descricao, quantidade
+                        FROM estrutura_materiais
+                        WHERE estrutura_id = %s
+                        """,
+                        (est_id,),
+                    )
+
+                    for mat_row in cursor.fetchall():
+                        m_code = str(mat_row[0] or "").strip()
+                        m_desc = str(mat_row[1] or "").strip()
+                        m_qty = float(mat_row[2] or 0)
+                        
+                        dedupe_key = (m_code, m_desc, m_qty)
+                        if dedupe_key in seen_materials:
+                            continue
+                        seen_materials.add(dedupe_key)
+                        
+                        materials.append(
+                            {
+                                "code": m_code,
+                                "desc": m_desc or self.get_sap_description(m_code),
+                                "qty": m_qty,
+                            }
+                        )
+
+                if not materials:
+                    print(
+                        f"[AVISO] Estrutura {structure_code} sem composição no Supabase"
+                    )
+                    return [
+                        {
+                            "code": "VERIFICAR",
+                            "desc": f"VERIFICAR ESTRUTURA {structure_code}",
+                            "qty": 1,
+                        }
+                    ]
+
+                return materials
+
+        except Exception as e:
+            print(f"[Supabase] Erro ao explodir estrutura {structure_code}: {e}")
             return [
                 {
                     "code": "VERIFICAR",
-                    "desc": f"VERIFICAR ESTRUTURA {structure_code}",
+                    "desc": f"Erro de banco - {structure_code}",
                     "qty": 1,
                 }
             ]
 
-        materials = []
-        seen_materials = set()
-        for est_row in estruturas:
-            est_id = est_row[0]
+    def get_structure_supported_pole_types(self, structure_code: str) -> set[str]:
+        """Retorna os tipos de poste suportados por uma estrutura no catálogo."""
+        code = str(structure_code or "").strip().upper()
+        if not code:
+            return set()
 
-            cursor = self.conn.execute(
-                """
-                SELECT material_codigo, material_descricao, quantidade
-                FROM estrutura_materiais
-                WHERE estrutura_id = ?
-                """,
-                (est_id,),
-            )
-
-            for mat_row in cursor.fetchall():
-                dedupe_key = (
-                    str(mat_row[0] or "").strip(),
-                    str(mat_row[1] or "").strip(),
-                    float(mat_row[2] or 0),
-                )
-                if dedupe_key in seen_materials:
-                    continue
-                seen_materials.add(dedupe_key)
-                materials.append(
-                    {
-                        "code": mat_row[0],
-                        "desc": mat_row[1] or self.get_sap_description(mat_row[0]),
-                        "qty": mat_row[2],
-                    }
-                )
-
-        if not materials:
-            print(
-                f"[AVISO] Estrutura {structure_code} sem composição no SQLite oficial"
-            )
-            return [
-                {
-                    "code": "VERIFICAR",
-                    "desc": f"VERIFICAR ESTRUTURA {structure_code}",
-                    "qty": 1,
-                }
-            ]
-
-        return materials
-
-    def _load_csv_structures_cache(self) -> None:
-        if self._csv_structures_cache:
-            return
-
-        csv_path = self.db_path.parent / "estruturas_materiais.csv"
-        if not csv_path.exists():
-            return
+        supported: set[str] = set()
+        conn = self.get_conn()
+        if not conn:
+            return supported
 
         try:
-            with csv_path.open("r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    code = str(row.get("estrutura_codigo", "") or "").strip().upper()
-                    sap = str(row.get("material_codigo", "") or "").strip()
-                    desc = str(row.get("material_descricao", "") or "").strip()
-                    if not code or not sap:
-                        continue
-                    try:
-                        qty = float(
-                            str(row.get("quantidade", "1") or "1").replace(",", ".")
-                        )
-                    except ValueError:
-                        qty = 1.0
-
-                    tipo_raw = (
-                        str(row.get("estrutura_tipo_poste", "ALL") or "ALL")
-                        .upper()
-                        .strip()
-                    )
-                    tipo_norm = "ALL"
-                    if "DT" in tipo_raw or "MADEIRA" in tipo_raw:
-                        tipo_norm = "DT"
-                    elif "CIRCULAR" in tipo_raw or "FIBRA" in tipo_raw:
-                        tipo_norm = "CIRCULAR"
-
-                    self._csv_structures_cache.setdefault(code, []).append(
-                        {
-                            "code": sap,
-                            "desc": desc or self.get_sap_description(sap),
-                            "qty": qty,
-                            "type": tipo_norm,
-                        }
-                    )
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT tipo_poste FROM estruturas WHERE codigo = %s",
+                    (code,),
+                )
+                for row in cursor.fetchall():
+                    value = str(row[0] or "").strip().upper()
+                    if value:
+                        supported.add(value)
         except Exception as e:
-            print(f"[AVISO] Falha ao carregar fallback CSV de estruturas: {e}")
+            print(f"[Supabase] Erro em get_structure_supported_pole_types: {e}")
 
-    def _explode_structure_from_csv(
-        self, structure_code: str, pole_type_str: str = "", is_dt: bool = False
-    ) -> List[Dict]:
-        self._load_csv_structures_cache()
-        code = str(structure_code or "").strip().upper()
-        rows = list(self._csv_structures_cache.get(code, []))
-        if not rows:
-            return []
-
-        wanted_type = "DT" if is_dt else "CIRCULAR"
-        filtered = [r for r in rows if r.get("type") in {wanted_type, "ALL"}]
-        if not filtered:
-            filtered = rows
-
-        out: Dict[str, Dict] = {}
-        for r in filtered:
-            sap = str(r.get("code", "") or "").strip()
-            if not sap:
-                continue
-            if sap not in out:
-                out[sap] = {
-                    "code": sap,
-                    "desc": str(r.get("desc", "") or self.get_sap_description(sap)),
-                    "qty": 0.0,
-                }
-            out[sap]["qty"] += float(r.get("qty", 0) or 0)
-
-        return list(out.values())
+        return supported
 
     def get_bom_items(self, categoria: str, subcategoria: str) -> List[Dict]:
-        """Compatibilidade: tabela BOM legada desabilitada no runtime atual."""
+        """Compatibilidade."""
         return []
 
     def find_structure_in_standards(self, structure_code: str) -> List[Dict]:
-        """Compatibilidade - busca estrutura (usa explode_structure internamente)."""
+        """Compatibilidade - busca estrutura."""
         return self.explode_structure(structure_code)
+
+    @property
+    def conn(self):
+        return self.get_conn()
+
+    def list_all_structures(self) -> list[str]:
+        """Retorna uma lista de todos os códigos de estruturas cadastrados no Supabase."""
+        conn = self.get_conn()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT codigo FROM estruturas WHERE codigo IS NOT NULL ORDER BY codigo"
+                )
+                return [str(row[0] or "").upper().strip() for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[Supabase] Erro em list_all_structures: {e}")
+            return []
+
+    def structure_exists(self, structure_code: str, pole_type: str = "") -> bool:
+        """Verifica se a estrutura existe no banco Supabase."""
+        conn = self.get_conn()
+        if not conn:
+            return False
+        code = str(structure_code or "").strip().upper()
+        if not code:
+            return False
+
+        is_dt = False
+        p_up = str(pole_type or "").upper()
+        if p_up.startswith("DT") or p_up.startswith("RT") or "DUPLO T" in p_up:
+            is_dt = True
+        tipo_filtro = "DT" if is_dt else "CIRCULAR"
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM estruturas
+                    WHERE codigo = %s AND (tipo_poste = %s OR tipo_poste = 'ALL')
+                    LIMIT 1
+                    """,
+                    (code, tipo_filtro),
+                )
+                if cursor.fetchone():
+                    return True
+
+                cursor.execute(
+                    "SELECT 1 FROM estruturas WHERE codigo = %s LIMIT 1",
+                    (code,),
+                )
+                return cursor.fetchone() is not None
+        except Exception as e:
+            print(f"[Supabase] Erro em structure_exists: {e}")
+            return False
+
+    def list_structure_candidates(self, prefix: str) -> list[str]:
+        """Retorna estruturas que começam com o prefixo especificado."""
+        conn = self.get_conn()
+        if not conn:
+            return []
+        pref = str(prefix or "").strip().upper()
+        if not pref:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT codigo FROM estruturas WHERE UPPER(codigo) LIKE %s ORDER BY codigo",
+                    (f"{pref}%",),
+                )
+                return [str(row[0]).upper().strip() for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[Supabase] Erro em list_structure_candidates: {e}")
+            return []
 
     def close(self):
         """Fecha conexão com o banco."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        if self._conn and not self._conn.closed:
+            self._conn.close()
+            self._conn = None
 
 
-# Alias para compatibilidade com imports existentes
-DatabaseLoader = SQLiteDatabaseLoader
+
+# Mantém apelidos idênticos ao SQLiteDatabaseLoader para compatibilidade de imports externos
+SQLiteDatabaseLoader = SupabaseDatabaseLoader
+DatabaseLoader = SupabaseDatabaseLoader
+

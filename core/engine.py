@@ -54,6 +54,8 @@ CINTA_SAP_MAP = {
 ALCA_MT_NU_MAP = {
     "4ANA": "30050155",
     "2ANA": "30050152",
+    "4AN": "30050155",
+    "2AN": "30050152",
     "1/0ANA": "30050150",
     "2/0ANA": "30050151",
     "3/0ANA": "30050153",
@@ -207,6 +209,8 @@ class MaterialEngine:
         self.db_loader = None
         self.detected_cables = {"MT": None, "BT": None}
         self.selected_smtr_structure = None
+        self.current_trafo_context = None
+        self.current_estai_context = None
         self.audit_log = []
         ensure_runtime_dirs()
         self.manual_corrections_path = str(OFFICIAL_MANUAL_CORRECTIONS_PATH)
@@ -303,41 +307,167 @@ class MaterialEngine:
 
     def _structure_exists_in_db(self, structure_code: str, pole_type: str = "") -> bool:
         """
-        Verifica se a estrutura existe no SQLite para a tipologia do poste
+        Verifica se a estrutura existe no banco para a tipologia do poste
         (ou fallback ALL), sem depender de alias.
         """
-        if not self.db_loader or not self.db_loader.conn:
+        if not self.db_loader:
             return False
-        code = str(structure_code or "").strip().upper()
-        if not code:
-            return False
+        return self.db_loader.structure_exists(structure_code, pole_type)
 
-        is_dt = False
-        p_up = str(pole_type or "").upper()
-        if p_up.startswith("DT") or p_up.startswith("RT") or "DUPLO T" in p_up:
-            is_dt = True
-        tipo_filtro = "DT" if is_dt else "CIRCULAR"
+    def _list_structure_candidates(self, prefix: str) -> list[str]:
+        if not self.db_loader:
+            return []
+        return self.db_loader.list_structure_candidates(prefix)
 
-        cur = self.db_loader.conn.execute(
-            """
-            SELECT 1
-            FROM estruturas
-            WHERE codigo = ? AND (tipo_poste = ? OR tipo_poste = 'ALL')
-            LIMIT 1
-            """,
-            (code, tipo_filtro),
-        )
-        if cur.fetchone():
-            return True
 
-        cur = self.db_loader.conn.execute(
-            "SELECT 1 FROM estruturas WHERE codigo = ? LIMIT 1",
-            (code,),
-        )
-        return cur.fetchone() is not None
+    def _resolve_transformer_signature(self, trafo_desc: str) -> list[str]:
+        txt = str(trafo_desc or "").upper().strip()
+        if not txt:
+            return []
+        match = re.search(r"(MONO|TRI|BI)[-\s]*([0-9]+(?:[.,][0-9]+)?)\s*KVA", txt)
+        if not match:
+            return []
+        phase = match.group(1)
+        kva_raw = match.group(2).replace(" ", "")
+        kva_dot = kva_raw.replace(",", ".")
+        kva_comma = kva_raw.replace(".", ",")
+        terms = [f"{kva_dot}KVA", f"{kva_comma}KVA"]
+        if phase == "MONO":
+            terms.extend(["MONO", "1F"])
+        elif phase == "TRI":
+            terms.extend(["TRIFASICO", "TRIFÁSICO", "3F"])
+        elif phase == "BI":
+            terms.extend(["BIFASICO", "BIFÁSICO", "2F"])
+        return terms
+
+    def _get_est_category(self, est_code: str) -> str:
+        est = str(est_code or "").upper().strip()
+        if est.startswith("N") or est.startswith("ET") or est.startswith("CE"):
+            return "N"
+        if est.startswith("B"):
+            return "B"
+        if est.startswith("U"):
+            return "U"
+        if "S" in est:
+            return "S"
+        if est.startswith("M"):
+            return "N"
+        return ""
+
+    def _resolve_clamp_lookup(self, pole_type: str, est_cat: str) -> tuple[str, str] | None:
+        p_type = self._normalize_pole_type(str(pole_type).upper())
+        p_type_norm = p_type.replace("x", "/").replace(" ", "")
+        lookup = (p_type_norm.split("(")[0], est_cat)
+        if lookup in self.clamp_logic:
+            return lookup
+
+        m = re.match(r"^C(\d{1,2})/(\d{3,4})$", lookup[0])
+        if not m:
+            return None
+
+        altura = int(m.group(1))
+        esforco = int(m.group(2))
+        candidates = []
+        for (pt_key, cat_key), _mats in self.clamp_logic.items():
+            if cat_key != est_cat:
+                continue
+            m2 = re.match(r"^C(\d{1,2})/(\d{3,4})$", pt_key)
+            if not m2:
+                continue
+            h2 = int(m2.group(1))
+            e2 = int(m2.group(2))
+            score = (0 if e2 == esforco else 1, abs(h2 - altura))
+            candidates.append((score, pt_key))
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[0])
+        return (candidates[0][1], est_cat)
+
+    def _infer_trafo_context(self, pole_map, p_id) -> str:
+        if not pole_map or p_id not in pole_map:
+            return ""
+        data = pole_map[p_id]
+        t_val = data.get("Trafo")
+        if t_val and str(t_val).upper() != "NONE":
+            return str(t_val)
+
+        # 2. Buscar em outros postes do mesmo projeto
+        for other_id, p_data in pole_map.items():
+            t_other = p_data.get("Trafo")
+            if t_other and str(t_other).upper() != "NONE":
+                return str(t_other)
+
+        # 3. Fallback inteligente baseado em outras estruturas do poste
+        ests = data.get("Est", []) or []
+        is_trifasico = False
+        for est in ests:
+            e_up = str(est).upper()
+            if any(term in e_up for term in ["3F", "4F", "B3", "N3", "U3", "S3", "CE3", "CE4"]):
+                is_trifasico = True
+                break
+
+        if is_trifasico:
+            return "TRI-45KVA"
+        else:
+            return "MONO-15KVA"
+
+    def _resolve_contextual_structure_code(
+        self,
+        structure_code: str,
+        pole_type: str = "",
+        trafo_desc: str = "",
+        estai_value=None,
+    ) -> str | None:
+        raw = str(structure_code or "").upper().strip()
+        if not raw or not self.db_loader:
+            return None
+
+        if raw == "XH5":
+            qty = 1
+            try:
+                qty = max(1, int(estai_value or 1))
+            except Exception:
+                qty = 1
+            prefixes = [f"{qty}XH5", "1XH5"]
+            for prefix in prefixes:
+                candidates = self._list_structure_candidates(prefix)
+                if candidates:
+                    return candidates[0]
+            return None
+
+        if raw not in {"ET1BR", "ET1T", "ET4", "ET4A"}:
+            return None
+
+        terms = self._resolve_transformer_signature(trafo_desc)
+        if not terms:
+            return None
+
+        prefix = {
+            "ET1BR": "ET1BR PARA ET1T",
+            "ET1T": "ET1T",
+            "ET4": "ET4A",
+            "ET4A": "ET4A",
+        }.get(raw, raw)
+        candidates = self._list_structure_candidates(prefix)
+        if not candidates:
+            return None
+
+        scored = []
+        for cand in candidates:
+            score = sum(1 for term in terms if term in cand)
+            scored.append((score, cand))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        if scored and scored[0][0] > 0:
+            return scored[0][1]
+        return None
 
     def _resolve_structure_code(
-        self, structure_code: str, pole_type: str = ""
+        self,
+        structure_code: str,
+        pole_type: str = "",
+        trafo_desc: str = "",
+        estai_value=None,
     ) -> tuple[str, bool]:
         """
         Resolve código de estrutura para busca no banco.
@@ -348,17 +478,29 @@ class MaterialEngine:
         if not raw:
             return raw, False
 
-        if raw == "SMTR":
-            smtr_variant = self.selected_smtr_structure or self._detect_smtr_variant()
-            if smtr_variant:
-                raw = smtr_variant
-
         aliased = STRUCTURE_ALIASES.get(raw, raw)
 
         # Política principal para evitar comportamento assintomático:
         # exato no BD sempre vence; alias só quando exato não existir.
         if self._structure_exists_in_db(raw, pole_type):
             return raw, False
+
+        trafo_ctx = trafo_desc or self.current_trafo_context or ""
+        estai_ctx = estai_value if estai_value is not None else self.current_estai_context
+
+        contextual = self._resolve_contextual_structure_code(
+            raw,
+            pole_type=pole_type,
+            trafo_desc=trafo_ctx,
+            estai_value=estai_ctx,
+        )
+        if contextual and self._structure_exists_in_db(contextual, pole_type):
+            return contextual, True
+
+        if raw == "SMTR":
+            smtr_variant = self.selected_smtr_structure or self._detect_smtr_variant()
+            if smtr_variant and self._structure_exists_in_db(smtr_variant, pole_type):
+                return smtr_variant, True
         if aliased != raw and self._structure_exists_in_db(aliased, pole_type):
             return aliased, True
 
@@ -387,24 +529,40 @@ class MaterialEngine:
         if not cable_descs:
             return None
 
-        def _contains_any(text: str, terms):
-            return any(t in text for t in terms)
-
         for desc in cable_descs:
+            compact = re.sub(r"[^A-Z0-9]+", "", desc.upper())
             if "XLPENI" in desc and "35" in desc:
                 return "SMTR - CABO MULT XLPENI AL 3C 2X35MM2+35MM2 1KV"
-            if _contains_any(desc, ["PE RET", "PRET", "3X120", "120(70)"]):
+            if (
+                any(term in desc for term in ["PE RET", "PRET", "PE RET."])
+                and "120" in desc
+                and "70" in desc
+            ):
                 return "SMTR - CABO AL PE RET 4C 3X120MM2 70MM2 1KV"
-            if _contains_any(desc, ["3X35", "35(35)"]):
-                return "SMTR - CABO AL 4C 3X35MM2+35MM2 1KV"
-            if _contains_any(desc, ["3X70", "70(70)"]):
+            if "3X70" in desc and any(
+                term in desc for term in ["(70)", "+70", "70MM2"]
+            ):
+                return "SMTR - CABO AL 4C 3X70MM2+70MM2 1KV"
+            if "2X70" in desc and any(
+                term in desc for term in ["(70)", "+70", "70MM2"]
+            ):
                 return "SMTR - CABO AL 3C 2X70MM2+70MM2 1KV"
-            if _contains_any(desc, ["2X120", "120MM2+70MM2"]):
+            if "3X35" in desc and any(
+                term in desc for term in ["(35)", "+35", "35MM2"]
+            ):
+                return "SMTR - CABO AL 4C 3X35MM2+35MM2 1KV"
+            if "2X120" in desc or "120MM2+70MM2" in desc:
+                return "SMTR - CABO AL 3C 2X120MM2+70MM2 1KV"
+            if "3X7070" in compact:
+                return "SMTR - CABO AL 4C 3X70MM2+70MM2 1KV"
+            if "2X7070" in compact:
+                return "SMTR - CABO AL 3C 2X70MM2+70MM2 1KV"
+            if "3X3535" in compact:
+                return "SMTR - CABO AL 4C 3X35MM2+35MM2 1KV"
+            if "2X12070" in compact:
                 return "SMTR - CABO AL 3C 2X120MM2+70MM2 1KV"
 
-        # Fallback determinístico: quando houver SMTR sem assinatura clara
-        # de cabo, usar a variante base mais comum na lista consolidada.
-        return SMTR_VARIANTS[0]
+        return None
 
     def _expand_composite_structures(self, structures: list[str]) -> list[str]:
         """
@@ -494,12 +652,23 @@ class MaterialEngine:
         return True
 
     def _confidence_from_score(self, score):
-        """Converte score de busca em confiança normalizada (0..1)."""
+        """Converte score de busca em confiança normalizada (0..1) adaptada para pg_trgm."""
         try:
             s = float(score)
         except (ValueError, TypeError):
             return 0.85
-        conf = 0.55 + (0.08 * s)
+        
+        # Para pg_trgm (similaridade 0..1):
+        # 0.30 é um match sólido (~75% de confiança)
+        # 0.50 é um match excelente (~90% de confiança)
+        # 1.00 é idêntico (~99% de confiança)
+        if s >= 0.5:
+            conf = 0.90 + (0.09 * (s - 0.5) / 0.5)
+        elif s >= 0.3:
+            conf = 0.75 + (0.15 * (s - 0.3) / 0.2)
+        else:
+            conf = 0.40 + (0.35 * s / 0.3)
+            
         return max(0.40, min(0.99, round(conf, 2)))
 
     def _apply_manual_correction(self, mat):
@@ -648,12 +817,20 @@ class MaterialEngine:
         # [FIX C4] import re removido — já importado no topo do arquivo
         nums = re.findall(r"\d+", p_type)
         if len(nums) >= 2:
-            h = nums[0]
-            c = nums[1]
+            try:
+                h = str(int(nums[0]))
+                c = str(int(nums[1]))
+            except Exception:
+                h = nums[0]
+                c = nums[1]
             termos_busca.append(f"{h}M")
             termos_busca.append(f"{c}DAN")
         elif len(nums) == 1:
-            termos_busca.append(f"{nums[0]}M")
+            try:
+                h = str(int(nums[0]))
+            except Exception:
+                h = nums[0]
+            termos_busca.append(f"{h}M")
 
         # [FIX] Se for DT ou D, excluir termos de MADEIRA ou MAD para evitar falso positivo
         exclude_terms = ["CONEXAO", "TOPO", "BRACADEIRA", "LUMINARIA", "SUPORTE"]
@@ -732,20 +909,6 @@ class MaterialEngine:
         )
         b2f_non_repeating_saps = {"30053443", "30056458"}
 
-        def _get_est_cat(est_code):
-            est_cat = ""
-            if est_code.startswith("N") or est_code.startswith("ET"):
-                est_cat = "N"
-            elif est_code.startswith("B"):
-                est_cat = "B"
-            elif est_code.startswith("U"):
-                est_cat = "U"
-            elif "S" in est_code:
-                est_cat = "S"
-            elif est_code.startswith("M"):
-                est_cat = "N"
-            return est_cat
-
         # 1. Adicionar o próprio POSTE
         pole_str = str(pole_type).upper()
         if "(E)" not in pole_str and "(R)" not in pole_str:
@@ -796,33 +959,10 @@ class MaterialEngine:
                 # SMTR deve seguir estritamente a composição da base (especialista),
                 # sem complemento pela lógica genérica de ferragens.
                 continue
-            est_cat = _get_est_cat(est)
+            est_cat = self._get_est_category(est)
 
-            lookup = (p_type_norm.split("(")[0], est_cat)
-            if lookup not in self.clamp_logic:
-                # Fallback por similaridade para postes circulares fora do mapa (ex.: C09/600).
-                m = re.match(r"^C(\d{1,2})/(\d{3,4})$", lookup[0])
-                if m:
-                    altura = int(m.group(1))
-                    esforco = int(m.group(2))
-                    candidates = []
-                    for (pt_key, cat_key), mats_key in self.clamp_logic.items():
-                        if cat_key != est_cat:
-                            continue
-                        m2 = re.match(r"^C(\d{1,2})/(\d{3,4})$", pt_key)
-                        if not m2:
-                            continue
-                        h2 = int(m2.group(1))
-                        e2 = int(m2.group(2))
-                        # prioriza mesmo esforço; depois altura mais próxima
-                        score = (0 if e2 == esforco else 1, abs(h2 - altura))
-                        candidates.append((score, pt_key))
-                    if candidates:
-                        candidates.sort(key=lambda x: x[0])
-                        best_key = candidates[0][1]
-                        lookup = (best_key, est_cat)
-
-            if lookup in self.clamp_logic:
+            lookup = self._resolve_clamp_lookup(pole_type, est_cat)
+            if lookup and lookup in self.clamp_logic:
                 est_cats_with_clamp_logic.add(est_cat)
                 clamp_items = list(self.clamp_logic[lookup])
                 # Regra de nível para postes cônicos/circulares:
@@ -916,7 +1056,7 @@ class MaterialEngine:
                     code = mat["code"]
                     desc = str(mat["desc"])
                     qty = mat["qty"]
-                    est_cat = _get_est_cat(est)
+                    est_cat = self._get_est_category(est)
                     strict_db_structure = est in {
                         "ET1T",
                         "ET4A",
@@ -1179,7 +1319,7 @@ class MaterialEngine:
             totals[sap] = totals.get(sap, 0.0) + qty
         return totals
 
-    def audit_structure_coverage(self, pole_map):
+    def audit_structure_coverage(self, pole_map, cables_list=None):
         """
         Auditoria generalista: valida se cada estrutura lida está refletida no cálculo
         com os mesmos materiais/quantidades da composição técnica (SQLite).
@@ -1213,11 +1353,18 @@ class MaterialEngine:
             )
             return report
 
+        if cables_list:
+            self._prime_detected_cables(cables_list)
+        if not self.selected_smtr_structure:
+            self.selected_smtr_structure = self._detect_smtr_variant(cables_list)
+
         smtr_seen = False
 
         for p_id, data in sorted((pole_map or {}).items(), key=lambda kv: kv[0]):
             pole_type = self._normalize_pole_type(data.get("Pole", "Desconhecido"))
             ests = list(data.get("Est", []) or [])
+            self.current_trafo_context = self._infer_trafo_context(pole_map, p_id)
+            self.current_estai_context = data.get("Estai")
             expanded = self._expand_composite_structures(ests)
             pole_details = []
             pole_ok = True
@@ -1236,7 +1383,12 @@ class MaterialEngine:
 
                 report["total_structures"] += 1
 
-                canonical, _ = self._resolve_structure_code(est_up, pole_type)
+                canonical, _ = self._resolve_structure_code(
+                    est_up,
+                    pole_type,
+                    trafo_desc=data.get("Trafo", ""),
+                    estai_value=data.get("Estai"),
+                )
 
                 expected_rows = self.db_loader.explode_structure(
                     canonical, pole_type_str=pole_type
@@ -1245,24 +1397,11 @@ class MaterialEngine:
                 # Para categorias com clamp_logic, itens de cinta/bracadeira da
                 # estrutura-base são substituídos por lógica dinâmica de poste.
                 # Portanto, não devem gerar falso positivo na auditoria.
-                est_cat = ""
-                if (
-                    est_up.startswith("N")
-                    or est_up.startswith("ET")
-                    or est_up.startswith("CE")
-                ):
-                    est_cat = "N"
-                elif est_up.startswith("B"):
-                    est_cat = "B"
-                elif est_up.startswith("U"):
-                    est_cat = "U"
-                elif "S" in est_up:
-                    est_cat = "S"
-                elif est_up.startswith("M"):
-                    est_cat = "N"
-
-                lookup_key = (pole_type.split("(")[0], est_cat)
-                has_clamp_logic = lookup_key in self.clamp_logic
+                est_cat = self._get_est_category(est_up)
+                lookup_key = self._resolve_clamp_lookup(pole_type, est_cat)
+                has_clamp_logic = bool(lookup_key and lookup_key in self.clamp_logic)
+                p_type_norm = str(pole_type or "").upper().replace(" ", "")
+                is_dt_pole = p_type_norm.startswith("DT") or p_type_norm.startswith("D")
 
                 # Esperado: cálculo da estrutura isolada aplicando as MESMAS regras
                 # generalistas do motor (cintas dinâmicas, filtros e fallbacks).
@@ -1296,7 +1435,7 @@ class MaterialEngine:
                         or "BRACADEIRA" in desc_up
                     ) and "ALÇA" not in desc_up
 
-                    if has_clamp_logic and is_cinta_bracadeira:
+                    if is_cinta_bracadeira and (has_clamp_logic or is_dt_pole):
                         continue
 
                     if not code or code.upper().startswith("VERIFICAR"):
@@ -1308,6 +1447,12 @@ class MaterialEngine:
 
                 unresolved_expected = (
                     valid_expected_count == 0 and verificar_expected_count > 0
+                )
+                contextual_without_trafo = (
+                    est_up in {"ET1BR", "ET1T", "ET4", "ET4A"}
+                    and not str(data.get("Trafo", "") or "").strip()
+                    and canonical == est_up
+                    and unresolved_expected
                 )
 
                 missing = []
@@ -1323,7 +1468,9 @@ class MaterialEngine:
                             }
                         )
 
-                detail_ok = (not missing) and (not unresolved_expected)
+                detail_ok = (not missing) and (
+                    (not unresolved_expected) or contextual_without_trafo
+                )
                 if not detail_ok:
                     pole_ok = False
                     report["mismatch_count"] += 1
@@ -1340,6 +1487,7 @@ class MaterialEngine:
                             if unresolved_expected
                             else "quantity_mismatch"
                         ),
+                        "context_missing": contextual_without_trafo,
                         "missing": missing,
                     }
                 )
@@ -1399,7 +1547,7 @@ class MaterialEngine:
                 # Regra determinística para cabo MT 3X2ANA(4ANA):
                 #  - 1 via de 4AWG ROSE (mesma metragem do trecho)
                 #  - 3 vias de 2AWG SPARROW (3 x metragem do trecho)
-                if tipo == "MT" and ("2ANA" in desc_up or "4ANA" in desc_up):
+                if tipo == "MT" and ("2ANA" in desc_up or "4ANA" in desc_up or "2AN" in desc_up or "4AN" in desc_up):
                     mats.append(
                         {
                             "Origem": f"Cabo {tipo}",
@@ -1472,7 +1620,7 @@ class MaterialEngine:
 
     # [FIX B2] resolve_poles_direct() REMOVIDO — funcionalidade idêntica a get_pole_sap()
 
-    def resolve_transformers_direct(self, transformers):
+    def resolve_transformers_direct(self, transformers, voltage_class: str = "HV"):
         """Resolve transformadores diretamente no CALC"""
         mats = []
 
@@ -1483,6 +1631,17 @@ class MaterialEngine:
 
             if "MONO" in t_type:
                 termos_busca.extend(["MONOF", "1F"])
+                is_kv_explicit = any(v in t_type for v in ["20,3", "20.3", "34,5", "34.5", "345"])
+                is_hv_explicit = any(v in t_type for v in ["7,96", "7.96", "13,8", "13.8", "HV"])
+                if is_kv_explicit:
+                    termos_busca.append("KV")
+                elif is_hv_explicit:
+                    termos_busca.append("HV")
+                else:
+                    if voltage_class == "HV":
+                        termos_busca.append("HV")
+                    else:
+                        termos_busca.append("KV")
             elif "TRI" in t_type:
                 termos_busca.extend(["TRIF", "3F"])
 
@@ -1599,6 +1758,25 @@ class MaterialEngine:
         self._prime_detected_cables(cables_list)
         self.selected_smtr_structure = self._detect_smtr_variant(cables_list)
 
+        # Detecção de classe de tensão (HV vs KV) do projeto
+        project_voltage_class = "HV"
+        for p_id, data in (pole_map or {}).items():
+            t_val = str(data.get("Trafo") or "").upper()
+            if "20,3" in t_val or "34,5" in t_val or "34.5" in t_val or "20.3" in t_val or " KV" in t_val:
+                project_voltage_class = "KV"
+                break
+            p_type = data.get("Pole", "")
+            ests = list(data.get("Est", []) or [])
+            for est in ests:
+                resolved_est, _ = self._resolve_structure_code(est, pole_type=p_type, trafo_desc=data.get("Trafo", ""))
+                if resolved_est:
+                    resolved_est_up = resolved_est.upper()
+                    if "20,3KV" in resolved_est_up or "34,5KV" in resolved_est_up or resolved_est_up.endswith(" KV") or " KV " in resolved_est_up:
+                        project_voltage_class = "KV"
+                        break
+            if project_voltage_class == "KV":
+                break
+
         # 0. Pré-normalização de tipologia e fallback para postes "Desconhecido"
         # usando o tipo dominante já identificado no mesmo projeto.
         normalized_types = {}
@@ -1619,6 +1797,8 @@ class MaterialEngine:
                 p_id, self._normalize_pole_type(data.get("Pole", "Desconhecido"))
             )
             ests = list(data.get("Est", []) or [])
+            self.current_trafo_context = self._infer_trafo_context(pole_map, p_id)
+            self.current_estai_context = data.get("Estai")
             if any(str(e).upper().strip() == "SMTR" for e in ests):
                 if smtr_applied:
                     ests = [e for e in ests if str(e).upper().strip() != "SMTR"]
@@ -1654,7 +1834,7 @@ class MaterialEngine:
                     t_val = str(data["Trafo"]).upper()
 
                     # A. Incluir o Equipamento Transformador em si
-                    transf_mats = self.resolve_transformers_direct([t_val])
+                    transf_mats = self.resolve_transformers_direct([t_val], voltage_class=project_voltage_class)
                     if not trafo_new_by_code:
                         transf_mats = [
                             tm

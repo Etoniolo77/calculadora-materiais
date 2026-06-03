@@ -95,7 +95,7 @@ def test_composite_structure_u4_1s4_expands_and_sums_materials():
     fake_loader = FakeDbLoader()
     engine.db_loader = fake_loader
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -143,7 +143,7 @@ def test_composite_structure_with_plus_is_expanded():
     fake_loader = FakeDbLoader()
     engine.db_loader = fake_loader
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -187,7 +187,7 @@ def test_structure_numeric_prefix_is_multiplier():
     fake_loader = FakeDbLoader()
     engine.db_loader = fake_loader
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -246,7 +246,7 @@ def test_structure_audit_detects_missing_materials_and_qty():
     engine = MaterialEngine()
     engine.db_loader = FakeDbLoader()
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -306,7 +306,7 @@ def test_structure_audit_passes_when_structure_materials_match():
     engine = MaterialEngine()
     engine.db_loader = FakeDbLoader()
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -358,7 +358,7 @@ def test_structure_audit_is_origin_label_agnostic():
     engine = MaterialEngine()
     engine.db_loader = FakeDbLoader()
     engine.is_loaded = True
-    engine._resolve_structure_code = lambda code, pole_type="": (
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
         str(code).upper(),
         False,
     )
@@ -379,3 +379,66 @@ def test_structure_audit_is_origin_label_agnostic():
 
     assert audit["ok"] is True
     assert audit["mismatch_count"] == 0
+
+
+def test_structure_audit_ignores_catalog_cintas_when_clamp_lookup_uses_fallback():
+    class FakeDbLoader:
+        def __init__(self):
+            self.conn = True
+            self.sap_codes = {}
+            self.unified_db = {}
+
+        def explode_structure(self, structure_code, pole_type_str=""):
+            return [
+                {"code": "30053137", "desc": "CINTA POSTE AC ZC F 200MM B-20", "qty": 2},
+                {"code": "30053138", "desc": "CINTA POSTE AC ZC F 220MM B-22", "qty": 2},
+                {"code": "30050394", "desc": "ARMACAO SECUNDARIA", "qty": 1},
+            ]
+
+        def get_sap_description(self, code):
+            return str(code)
+
+        def find_material_by_description(self, search_terms, limit=1, exclude_terms=None):
+            return [("10000000", "POSTE TESTE", 1)]
+
+    engine = MaterialEngine()
+    engine.db_loader = FakeDbLoader()
+    engine.is_loaded = True
+    engine.clamp_logic = {("C11/600", "S"): [("30053140", 1)]}
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
+        str(code).upper(),
+        False,
+    )
+
+    def fake_resolve_clamps(_pole_type, _structures, p_id=""):
+        return [
+            {
+                "Origem": f"Ferragem S2 em {p_id}",
+                "Código SAP": "30053140",
+                "Descrição": "CINTA POSTE AC ZC F 240MM B-24",
+                "Quantidade": 1,
+            },
+            {
+                "Origem": f"Estrutura S2 em {p_id}",
+                "Código SAP": "30050394",
+                "Descrição": "ARMACAO SECUNDARIA",
+                "Quantidade": 1,
+            },
+        ]
+
+    engine.resolve_clamps = fake_resolve_clamps
+    audit = engine.audit_structure_coverage({"P2": {"Pole": "C09/600", "Est": ["S2"]}})
+
+    assert audit["ok"] is True
+    assert audit["mismatch_count"] == 0
+
+
+def test_detect_smtr_variant_maps_3x70_signature_to_4c_variant():
+    engine = MaterialEngine()
+    engine.detected_cables = {"MT": None, "BT": None}
+
+    variant = engine._detect_smtr_variant(
+        [{"Tipo": "BT", "Desc": "BT 1X3X70(70)AXNI", "Qtd": 10}]
+    )
+
+    assert variant == "SMTR - CABO AL 4C 3X70MM2+70MM2 1KV"

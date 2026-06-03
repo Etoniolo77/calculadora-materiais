@@ -15,8 +15,7 @@
       </div>
       <div class="headerActions">
         <button id="btnGoProgramacao" type="button" class="btnSecondary">Programacao</button>
-        <button id="btnCheckUpdate" type="button" class="btnSecondary">Buscar Atualizacao</button>
-        <button id="btnApplyUpdate" type="button" class="btnSecondary" disabled>Atualizar Agora</button>
+        <a href="/auth/logout" class="btnSecondary" style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 16px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-color); font-size: 14px; font-weight: 500; cursor: pointer;">Sair</a>
       </div>
     </header>
     <p id="updateStatus" class="status"></p>
@@ -83,6 +82,7 @@
         <button id="btnCalculate">Calcular BOM</button>
         <button id="btnDownloadCsv" disabled>Baixar CSV</button>
         <button id="btnDownloadPdf" disabled>Baixar PDF</button>
+        <button id="btnSendWhatsapp" disabled>Enviar WhatsApp</button>
       </div>
       <p id="calcStatus" class="status"></p>
       <div id="validationBox"></div>

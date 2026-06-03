@@ -48,76 +48,111 @@ app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend"
 _engine_lock = threading.Lock()
 _engine: MaterialEngine | None = None
 
+from jose import jwt, JWTError
+from dotenv import load_dotenv
+
+# Carregar variáveis do .env do backend
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
+
 UPDATE_CONFIG_PATH = PROJECT_ROOT / "update" / "update_config.json"
 APP_VERSION_PATH = PROJECT_ROOT / "app_version.json"
-AUTH_CONFIG_PATH = PROJECT_ROOT / "auth" / "auth_config.json"
-AUTH_SESSION_COOKIE = "calc_local_auth"
-AUTH_SECRET = os.environ.get("CALC_AUTH_SECRET", "calc-local-auth-secret")
+AUTH_SESSION_COOKIE = "sb-access-token"
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
+ALLOWED_EMAIL_DOMAIN = "eletromarquez.com.br"
 
 
-def _load_auth_config() -> dict[str, str]:
-    defaults = {
-        "allowed_email_domain": "eletromarquez.com.br",
-        "pin_code": "Eletro2026",
-    }
-    if not AUTH_CONFIG_PATH.exists():
-        return defaults
-    data = json.loads(AUTH_CONFIG_PATH.read_text(encoding="utf-8"))
-    return {
-        "allowed_email_domain": str(
-            data.get("allowed_email_domain", defaults["allowed_email_domain"])
-        )
-        .strip()
-        .lower(),
-        "pin_code": str(data.get("pin_code", defaults["pin_code"])).strip(),
-    }
-
-
-def _sign_session(email: str) -> str:
-    sig = hmac.new(
-        AUTH_SECRET.encode("utf-8"), email.encode("utf-8"), digestmod="sha256"
-    ).hexdigest()
-    return f"{email}|{sig}"
-
-
-def _verify_session(token: str | None) -> str | None:
-    if not token or "|" not in token:
+def _verify_supabase_jwt(token: str | None) -> str | None:
+    if not token:
         return None
-    email, sig = token.rsplit("|", 1)
-    expected = hmac.new(
-        AUTH_SECRET.encode("utf-8"), email.encode("utf-8"), digestmod="sha256"
-    ).hexdigest()
-    if hmac.compare_digest(sig, expected):
-        return email
+        
+    # 1. Tentativa de decodificação local (para compatibilidade rápida sem rede se for HS256 e segredo correto)
+    if SUPABASE_JWT_SECRET and SUPABASE_JWT_SECRET != "seu_jwt_secret_do_supabase":
+        try:
+            # Decodifica o JWT vindo do Supabase Auth
+            payload = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+            email = str(payload.get("email", "")).strip().lower()
+            if "@" in email:
+                domain = email.split("@", 1)[1]
+                if domain == ALLOWED_EMAIL_DOMAIN:
+                    return email
+            return None
+        except JWTError as exc:
+            print(f"[Supabase Auth] Decodificacao local falhou ({exc}). Tentando validacao via API do Supabase...")
+
+    # 2. Fallback: validação chamando a API do Supabase (funciona para HS256 e RS256/ES256)
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY")
+    
+    if not supabase_url or not supabase_anon_key:
+        print("[Supabase Auth] ERRO: SUPABASE_URL ou SUPABASE_ANON_KEY nao configurados para validacao via API.")
+        return None
+        
+    try:
+        import requests
+        url = f"{supabase_url.rstrip('/')}/auth/v1/user"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "apikey": supabase_anon_key
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            user_data = resp.json()
+            email = str(user_data.get("email", "")).strip().lower()
+            if "@" in email:
+                domain = email.split("@", 1)[1]
+                if domain == ALLOWED_EMAIL_DOMAIN:
+                    print(f"[Supabase Auth] Token validado com sucesso via API para: {email}")
+                    return email
+        else:
+            print(f"[Supabase Auth] API de Autenticacao respondeu com erro {resp.status_code}: {resp.text}")
+    except Exception as exc:
+        print(f"[Supabase Auth] Falha ao conectar a API do Supabase para validacao: {exc}")
+        
     return None
 
 
-class LocalAuthMiddleware(BaseHTTPMiddleware):
+class SupabaseAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         public_paths = (
             "/login",
-            "/auth/local-login",
+            "/auth/session",
             "/auth/logout",
             "/health",
             "/api/version",
+            "/api/config",
             "/api/structures",
             "/frontend/",
         )
         if any(path == p or path.startswith(p) for p in public_paths):
             return await call_next(request)
-        session = _verify_session(request.cookies.get(AUTH_SESSION_COOKIE))
+
+        # Buscar token nos cookies ou no header Authorization (Bearer)
+        token = request.cookies.get(AUTH_SESSION_COOKIE)
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+
+        session = _verify_supabase_jwt(token)
         if not session:
             if path.startswith("/api/"):
                 return JSONResponse(
                     status_code=401,
-                    content={"detail": "Sessao expirada. Faca login novamente."},
+                    content={"detail": "Sessao expirada. Faca login novamente no Supabase."},
                 )
             return RedirectResponse(url="/login")
         return await call_next(request)
 
 
-app.add_middleware(LocalAuthMiddleware)
+app.add_middleware(SupabaseAuthMiddleware)
+
+
 
 
 def _parse_version(value: str) -> tuple[int, ...]:
@@ -580,14 +615,8 @@ def app_version() -> dict[str, str]:
 def list_structures() -> dict[str, list[str]]:
     engine = _get_engine()
     codes: list[str] = []
-    if engine.db_loader and engine.db_loader.conn:
-        cursor = engine.db_loader.conn.execute(
-            "SELECT DISTINCT codigo FROM estruturas WHERE codigo IS NOT NULL ORDER BY codigo"
-        )
-        for row in cursor.fetchall():
-            code = str(row[0] or "").upper().strip()
-            if not code:
-                continue
+    if engine.db_loader:
+        for code in engine.db_loader.list_all_structures():
             # Exclui ruídos do catálogo (kVA, numéricos puros, metragem, etc.)
             if re.match(r"^\d+(?:[.,]\d+)?(?:KVA)?$", code):
                 continue
@@ -611,26 +640,25 @@ def login_page(error: str = "") -> HTMLResponse:
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
-@app.post("/auth/local-login")
-def auth_local_login(email: str = Form(""), pin: str = Form("")):
-    cfg = _load_auth_config()
-    email_norm = str(email or "").strip().lower()
-    pin_norm = str(pin or "").strip()
-    if "@" not in email_norm:
-        return RedirectResponse(
-            url="/login?error=Informe+um+e-mail+valido.", status_code=303
-        )
-    domain = email_norm.split("@", 1)[1]
-    if domain != cfg["allowed_email_domain"]:
-        return RedirectResponse(
-            url="/login?error=Acesso+restrito+ao+dominio+corporativo.", status_code=303
-        )
-    if pin_norm != cfg["pin_code"]:
-        return RedirectResponse(url="/login?error=PIN+invalido.", status_code=303)
+@app.get("/api/config")
+def get_config() -> dict[str, str]:
+    return {
+        "supabase_url": os.environ.get("SUPABASE_URL", ""),
+        "supabase_anon_key": os.environ.get("SUPABASE_ANON_KEY", ""),
+    }
 
-    resp = RedirectResponse(url="/", status_code=303)
+
+@app.post("/auth/session")
+def auth_session(payload: dict[str, str]):
+    token = payload.get("token", "")
+    email = _verify_supabase_jwt(token)
+    if not email:
+        raise HTTPException(
+            status_code=401, detail="Sessao invalida ou expirada no Supabase."
+        )
+    resp = JSONResponse(content={"status": "ok", "email": email})
     resp.set_cookie(
-        AUTH_SESSION_COOKIE, _sign_session(email_norm), httponly=True, samesite="lax"
+        AUTH_SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=86400 * 7
     )
     return resp
 
@@ -640,6 +668,10 @@ def auth_logout():
     resp = RedirectResponse(url="/login", status_code=303)
     resp.delete_cookie(AUTH_SESSION_COOKIE)
     return resp
+
+
+
+
 
 
 @app.get("/")
@@ -749,7 +781,9 @@ async def calculate(payload: dict[str, Any]) -> JSONResponse:
         validator = TechnicalValidator()
         validator.validate({"pole_map": pole_map, "cables": cable_rows})
         validation = validator.get_summary()
-        structure_audit = engine.audit_structure_coverage(pole_map)
+        structure_audit = engine.audit_structure_coverage(
+            pole_map, cable_rows
+        )
 
         recommendations = _build_calculation_recommendations(
             pole_map, bom_rows, validation, structure_audit
@@ -854,54 +888,22 @@ async def parse_json(payload: dict[str, Any]) -> JSONResponse:
 @app.get("/api/update/check")
 async def check_update() -> JSONResponse:
     local_version = _load_local_version()
-    remote = _resolve_remote_release()
-    remote_version = remote["remote_version"]
-    update_available = _parse_version(remote_version) > _parse_version(local_version)
     return JSONResponse(
         {
             "local_version": local_version,
-            "remote_version": remote_version,
-            "package_url": remote["package_url"],
-            "update_available": update_available,
+            "remote_version": local_version,
+            "package_url": "",
+            "update_available": False,
         }
     )
 
 
 @app.post("/api/update/apply")
 async def apply_update(payload: dict[str, Any]) -> JSONResponse:
-    target_version = str(payload.get("target_version", "")).strip()
-    package_url = str(payload.get("package_url", "")).strip()
-    if not target_version or not package_url:
-        raise HTTPException(
-            status_code=400, detail="target_version e package_url sao obrigatorios."
-        )
-
-    ps_script = PROJECT_ROOT / "scripts" / "update_app.ps1"
-    if not ps_script.exists():
-        raise HTTPException(status_code=500, detail="Script de update nao encontrado.")
-
-    cmd = [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(ps_script),
-        "-TargetVersion",
-        target_version,
-        "-PackageUrl",
-        package_url,
-    ]
-    try:
-        subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Falha ao iniciar processo de update: {exc}"
-        ) from exc
-
     return JSONResponse(
         {
-            "ok": True,
-            "message": "Atualizacao iniciada. Aguarde 20-40 segundos e abra novamente a aplicacao.",
+            "ok": False,
+            "message": "Atualizacoes automoticas desativadas. O projeto agora e gerenciado via Git/Vercel.",
         }
     )
+

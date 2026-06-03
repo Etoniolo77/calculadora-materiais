@@ -51,6 +51,16 @@ try {
         & $ensurePythonScript -ProjectRoot $projectRoot | Out-Host
     }
 
+    Write-Host "[1/3] Garantindo que nenhuma instancia antiga esteja rodando..."
+    $stopScript = Join-Path $PSScriptRoot "stop_internal_fastapi.ps1"
+    if (Test-Path $stopScript) {
+        try {
+            & $stopScript -ProjectRoot $projectRoot | Out-Null
+        } catch {
+            Write-Host "[1/3] Aviso: nao foi possivel parar a instancia anterior: $_"
+        }
+    }
+
     Write-Host "[1/3] Iniciando backend FastAPI..."
     try {
         if ($UseSystemPython) {
@@ -61,7 +71,16 @@ try {
     } catch {
         $msg = $_.Exception.Message
         if ($msg -like "*Ja existe processo FastAPI ativo*") {
-            Write-Host "[1/3] Backend ja estava em execucao. Reutilizando instancia atual."
+            Write-Host "[1/3] Conflito persistente detectado. Tentando parada forcada..."
+            if (Test-Path $stopScript) {
+                & $stopScript -ProjectRoot $projectRoot | Out-Null
+            }
+            Start-Sleep -Seconds 1
+            if ($UseSystemPython) {
+                & $startScript -ProjectRoot $projectRoot -BindAddress $BindAddress -Port $Port -UseSystemPython -WaitForHealth
+            } else {
+                & $startScript -ProjectRoot $projectRoot -BindAddress $BindAddress -Port $Port -WaitForHealth
+            }
         } else {
             throw
         }
@@ -69,7 +88,7 @@ try {
 
     Write-Host "[2/3] Validando resposta da aplicacao..."
     $healthOk = $false
-    for ($i = 1; $i -le 10; $i++) {
+    for ($i = 1; $i -le 30; $i++) {
         try {
             & $healthScript -BindAddress $BindAddress -Port $Port | Out-Host
             $healthOk = $true
