@@ -26,3 +26,7 @@ Lista_Material_Calculada.csv
 .venv/
 venv/
 env/
+.vercel
+
+# Segredos locais (nunca versionar)
+backend/.env
