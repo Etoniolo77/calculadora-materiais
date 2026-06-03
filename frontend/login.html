@@ -271,6 +271,8 @@
     let activeTab = 'login';
     let supabaseClient = null;
     const ALLOWED_DOMAIN = 'eletromarquez.com.br';
+    const SUPABASE_URL = 'https://zhuwirlcnbxysbgdtses.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpodXdpcmxjbmJ4eXNiZ2R0c2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NTI1MjAsImV4cCI6MjA5NjAyODUyMH0.RJ0yS7aWZLAhRGhuN26hwZ0eg3SEw99DbUmAIlzOp30';
 
     const statusBox = document.getElementById("statusBox");
     const formSubtitle = document.getElementById("formSubtitle");
@@ -281,21 +283,28 @@
     const btnText = document.getElementById("btnText");
     const authForm = document.getElementById("authForm");
 
-    // Inicializar cliente Supabase consultando as credenciais no backend
+    // Inicializar cliente Supabase no frontend (deploy estático)
     async function initSupabase() {
       try {
-        const resp = await fetch("/api/config");
-        if (!resp.ok) throw new Error("Erro ao ler credenciais do servidor.");
-        const config = await resp.json();
-        
-        if (!config.supabase_url || !config.supabase_anon_key) {
-          showStatus("Configuração do Supabase ausente no servidor. Verifique o arquivo .env.", false);
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+          showStatus("Configuração do Supabase ausente no frontend.", false);
           btnSubmit.disabled = true;
           return;
         }
 
+        if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+          throw new Error('Biblioteca do Supabase não carregada.');
+        }
+
         // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente
-        supabaseClient = supabase.createClient(config.supabase_url, config.supabase_anon_key);
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        const {
+          data: { session },
+        } = await supabaseClient.auth.getSession();
+        if (session?.access_token) {
+          window.location.href = '/';
+        }
       } catch (err) {
         showStatus("Erro de inicialização: " + err.message, false);
         btnSubmit.disabled = true;
@@ -354,20 +363,8 @@
       try {
         if (activeTab === 'login') {
           // Realizar login no Supabase
-          const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+          const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
           if (error) throw error;
-
-          // Enviar token ao backend para fixar cookie seguro de sessão
-          const sessionResp = await fetch("/auth/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: data.session.access_token })
-          });
-
-          if (!sessionResp.ok) {
-            const errData = await sessionResp.json();
-            throw new Error(errData.detail || "Falha ao registrar sessão no backend.");
-          }
 
           // Redirecionar ao index
           showStatus("Acesso autorizado! Redirecionando...", true);

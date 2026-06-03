@@ -16,6 +16,10 @@ const state = {
 };
 
 const APP_MODE = document.body?.dataset?.appMode || "programacao";
+const SUPABASE_URL = "https://zhuwirlcnbxysbgdtses.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpodXdpcmxjbmJ4eXNiZ2R0c2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NTI1MjAsImV4cCI6MjA5NjAyODUyMH0.RJ0yS7aWZLAhRGhuN26hwZ0eg3SEw99DbUmAIlzOp30";
+let authClient = null;
 
 const POLE_TYPES = [
   "Desconhecido",
@@ -69,6 +73,7 @@ const els = {
   btnDownloadCsv: document.getElementById("btnDownloadCsv"),
   btnDownloadPdf: document.getElementById("btnDownloadPdf"),
   btnSendWhatsapp: document.getElementById("btnSendWhatsapp"),
+  btnLogout: document.getElementById("btnLogout"),
 };
 
 const updateState = {
@@ -811,16 +816,34 @@ async function parseApiError(resp, fallbackMessage) {
   if (resp.status === 401) {
     window.location.href = "/login";
   }
+  if (resp.status === 404 && String(resp.url || "").includes("/api/")) {
+    message = "API indisponível na publicação atual. Verifique o deploy das rotas /api no Vercel.";
+  }
   return message;
+}
+
+function getAuthClient() {
+  if (authClient) {
+    return authClient;
+  }
+  if (!window.supabase || typeof window.supabase.createClient !== "function") {
+    throw new Error("Biblioteca do Supabase não carregada.");
+  }
+  authClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return authClient;
 }
 
 async function ensureAuthenticatedSession() {
   try {
-    const resp = await fetch("/auth/session", {
-      method: "GET",
-      credentials: "include",
-    });
-    if (resp.ok) {
+    const client = getAuthClient();
+    const {
+      data: { session },
+      error,
+    } = await client.auth.getSession();
+    if (error) {
+      throw error;
+    }
+    if (session?.access_token) {
       return true;
     }
   } catch (_err) {
@@ -829,6 +852,16 @@ async function ensureAuthenticatedSession() {
 
   window.location.href = "/login";
   return false;
+}
+
+async function logoutAndRedirect() {
+  try {
+    const client = getAuthClient();
+    await client.auth.signOut();
+  } catch (_err) {
+    // Mesmo com falha no signOut, redireciona para login.
+  }
+  window.location.href = "/login";
 }
 
 async function checkForUpdates() {
@@ -1079,6 +1112,11 @@ if (els.btnGoAsBuilt) {
 }
 if (els.btnGoProgramacao) {
   els.btnGoProgramacao.addEventListener("click", () => navigateWithVersion("/"));
+}
+if (els.btnLogout) {
+  els.btnLogout.addEventListener("click", () => {
+    logoutAndRedirect();
+  });
 }
 
 async function bootstrapApp() {
