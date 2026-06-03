@@ -2,9 +2,7 @@ pandas
 pdfplumber
 reportlab
 openpyxl
-anthropic>=0.40.0
 fastapi
-uvicorn[standard]
 python-multipart
 python-jose[cryptography]
 python-dotenv
