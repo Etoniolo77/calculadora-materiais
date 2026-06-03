@@ -2,6 +2,18 @@
   "cleanUrls": false,
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/auth/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index.py"
+    },
+    {
       "source": "/",
       "destination": "/frontend/index.html"
     },

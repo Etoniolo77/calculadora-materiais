@@ -1,0 +1,4 @@
+-r core/requirements.txt
+python-jose[cryptography]
+python-dotenv
+requests
