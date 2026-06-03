@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # Resolver caminhos
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
 BACKEND_DIR = PROJECT_ROOT / "backend"
 ENV_PATH = BACKEND_DIR / ".env"
 SQLITE_DB_PATH = PROJECT_ROOT / "data" / "materials.db"
