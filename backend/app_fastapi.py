@@ -24,6 +24,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+
 def _resolve_project_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parents[2]
@@ -48,8 +49,8 @@ app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend"
 _engine_lock = threading.Lock()
 _engine: MaterialEngine | None = None
 
-from jose import jwt, JWTError
 from dotenv import load_dotenv
+from jose import JWTError, jwt
 
 # Carregar variáveis do .env do backend
 load_dotenv(PROJECT_ROOT / "backend" / ".env")
@@ -64,7 +65,7 @@ ALLOWED_EMAIL_DOMAIN = "eletromarquez.com.br"
 def _verify_supabase_jwt(token: str | None) -> str | None:
     if not token:
         return None
-        
+
     # 1. Tentativa de decodificação local (para compatibilidade rápida sem rede se for HS256 e segredo correto)
     if SUPABASE_JWT_SECRET and SUPABASE_JWT_SECRET != "seu_jwt_secret_do_supabase":
         try:
@@ -82,23 +83,25 @@ def _verify_supabase_jwt(token: str | None) -> str | None:
                     return email
             return None
         except JWTError as exc:
-            print(f"[Supabase Auth] Decodificacao local falhou ({exc}). Tentando validacao via API do Supabase...")
+            print(
+                f"[Supabase Auth] Decodificacao local falhou ({exc}). Tentando validacao via API do Supabase..."
+            )
 
     # 2. Fallback: validação chamando a API do Supabase (funciona para HS256 e RS256/ES256)
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY")
-    
+
     if not supabase_url or not supabase_anon_key:
-        print("[Supabase Auth] ERRO: SUPABASE_URL ou SUPABASE_ANON_KEY nao configurados para validacao via API.")
+        print(
+            "[Supabase Auth] ERRO: SUPABASE_URL ou SUPABASE_ANON_KEY nao configurados para validacao via API."
+        )
         return None
-        
+
     try:
         import requests
+
         url = f"{supabase_url.rstrip('/')}/auth/v1/user"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "apikey": supabase_anon_key
-        }
+        headers = {"Authorization": f"Bearer {token}", "apikey": supabase_anon_key}
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             user_data = resp.json()
@@ -106,13 +109,19 @@ def _verify_supabase_jwt(token: str | None) -> str | None:
             if "@" in email:
                 domain = email.split("@", 1)[1]
                 if domain == ALLOWED_EMAIL_DOMAIN:
-                    print(f"[Supabase Auth] Token validado com sucesso via API para: {email}")
+                    print(
+                        f"[Supabase Auth] Token validado com sucesso via API para: {email}"
+                    )
                     return email
         else:
-            print(f"[Supabase Auth] API de Autenticacao respondeu com erro {resp.status_code}: {resp.text}")
+            print(
+                f"[Supabase Auth] API de Autenticacao respondeu com erro {resp.status_code}: {resp.text}"
+            )
     except Exception as exc:
-        print(f"[Supabase Auth] Falha ao conectar a API do Supabase para validacao: {exc}")
-        
+        print(
+            f"[Supabase Auth] Falha ao conectar a API do Supabase para validacao: {exc}"
+        )
+
     return None
 
 
@@ -144,15 +153,15 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
             if path.startswith("/api/"):
                 return JSONResponse(
                     status_code=401,
-                    content={"detail": "Sessao expirada. Faca login novamente no Supabase."},
+                    content={
+                        "detail": "Sessao expirada. Faca login novamente no Supabase."
+                    },
                 )
             return RedirectResponse(url="/login")
         return await call_next(request)
 
 
 app.add_middleware(SupabaseAuthMiddleware)
-
-
 
 
 def _parse_version(value: str) -> tuple[int, ...]:
@@ -186,7 +195,10 @@ def _resolve_remote_release() -> dict[str, str]:
             status_code=400,
             detail="Configure manifest_url em update/update_config.json.",
         )
-    if "SEU_SHAREPOINT" in manifest_url.upper() or "SEU-ENDPOINT" in manifest_url.upper():
+    if (
+        "SEU_SHAREPOINT" in manifest_url.upper()
+        or "SEU-ENDPOINT" in manifest_url.upper()
+    ):
         raise HTTPException(
             status_code=400,
             detail="Atualizacao ainda nao configurada. Informe um manifesto privado real em update_config.json.",
@@ -648,8 +660,19 @@ def get_config() -> dict[str, str]:
     }
 
 
+@app.get("/auth/session")
+def auth_session_get(request: Request) -> dict[str, str]:
+    token = request.cookies.get(AUTH_SESSION_COOKIE)
+    email = _verify_supabase_jwt(token)
+    if not email:
+        raise HTTPException(
+            status_code=401, detail="Sessao invalida ou expirada no Supabase."
+        )
+    return {"status": "ok", "email": email}
+
+
 @app.post("/auth/session")
-def auth_session(payload: dict[str, str]):
+def auth_session_set(payload: dict[str, str]):
     token = payload.get("token", "")
     email = _verify_supabase_jwt(token)
     if not email:
@@ -668,10 +691,6 @@ def auth_logout():
     resp = RedirectResponse(url="/login", status_code=303)
     resp.delete_cookie(AUTH_SESSION_COOKIE)
     return resp
-
-
-
-
 
 
 @app.get("/")
@@ -781,9 +800,7 @@ async def calculate(payload: dict[str, Any]) -> JSONResponse:
         validator = TechnicalValidator()
         validator.validate({"pole_map": pole_map, "cables": cable_rows})
         validation = validator.get_summary()
-        structure_audit = engine.audit_structure_coverage(
-            pole_map, cable_rows
-        )
+        structure_audit = engine.audit_structure_coverage(pole_map, cable_rows)
 
         recommendations = _build_calculation_recommendations(
             pole_map, bom_rows, validation, structure_audit
@@ -906,4 +923,3 @@ async def apply_update(payload: dict[str, Any]) -> JSONResponse:
             "message": "Atualizacoes automoticas desativadas. O projeto agora e gerenciado via Git/Vercel.",
         }
     )
-

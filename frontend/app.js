@@ -799,18 +799,36 @@ async function sendPdfViaWhatsapp() {
 
 async function parseApiError(resp, fallbackMessage) {
   let message = fallbackMessage;
-  try {
-    const data = await resp.json();
-    if (data?.detail) {
-      message = data.detail;
-    }
-  } catch {
-    const text = await resp.text();
-    if (text) {
-      message = text;
+  const rawBody = await resp.text();
+  if (rawBody) {
+    try {
+      const data = JSON.parse(rawBody);
+      message = data?.detail || data?.message || rawBody;
+    } catch {
+      message = rawBody;
     }
   }
+  if (resp.status === 401) {
+    window.location.href = "/login";
+  }
   return message;
+}
+
+async function ensureAuthenticatedSession() {
+  try {
+    const resp = await fetch("/auth/session", {
+      method: "GET",
+      credentials: "include",
+    });
+    if (resp.ok) {
+      return true;
+    }
+  } catch (_err) {
+    // segue para redirecionamento
+  }
+
+  window.location.href = "/login";
+  return false;
 }
 
 async function checkForUpdates() {
@@ -1063,14 +1081,23 @@ if (els.btnGoProgramacao) {
   els.btnGoProgramacao.addEventListener("click", () => navigateWithVersion("/"));
 }
 
-state.poles = [ensurePoleDefaults({}, 0)];
-state.cables = [ensureCableDefaults({ Tipo: "BT", Desc: "", Qtd: 0 })];
-renderDatalist("structureHints", structureHints);
-renderDatalist("cableDescHints", CABLE_DESC_HINTS);
-refreshStructureHints();
-renderPolesTable();
-renderCablesTable();
-renderBomByPoleSelector();
-renderBomByPole();
-renderQualityGate();
-loadVersionInfo();
+async function bootstrapApp() {
+  const isAuthenticated = await ensureAuthenticatedSession();
+  if (!isAuthenticated) {
+    return;
+  }
+
+  state.poles = [ensurePoleDefaults({}, 0)];
+  state.cables = [ensureCableDefaults({ Tipo: "BT", Desc: "", Qtd: 0 })];
+  renderDatalist("structureHints", structureHints);
+  renderDatalist("cableDescHints", CABLE_DESC_HINTS);
+  refreshStructureHints();
+  renderPolesTable();
+  renderCablesTable();
+  renderBomByPoleSelector();
+  renderBomByPole();
+  renderQualityGate();
+  loadVersionInfo();
+}
+
+bootstrapApp();
