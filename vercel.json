@@ -1,33 +1,29 @@
 {
-  "cleanUrls": true,
+  "cleanUrls": false,
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://[SEU_BACKEND_NO_RAILWAY_OU_RENDER]/api/:path*"
+      "source": "/",
+      "destination": "/frontend/index.html"
     },
     {
-      "source": "/auth/:path*",
-      "destination": "https://[SEU_BACKEND_NO_RAILWAY_OU_RENDER]/auth/:path*"
-    },
-    {
-      "source": "/login",
-      "destination": "https://[SEU_BACKEND_NO_RAILWAY_OU_RENDER]/login"
-    },
-    {
-      "source": "/health",
-      "destination": "https://[SEU_BACKEND_NO_RAILWAY_OU_RENDER]/health"
+      "source": "/index.html",
+      "destination": "/frontend/index.html"
     },
     {
       "source": "/as-built",
-      "destination": "https://[SEU_BACKEND_NO_RAILWAY_OU_RENDER]/as-built"
+      "destination": "/frontend/asbuilt.html"
     },
     {
       "source": "/asbuilt.html",
       "destination": "/frontend/asbuilt.html"
     },
     {
-      "source": "/",
-      "destination": "/frontend/index.html"
+      "source": "/login",
+      "destination": "/frontend/login.html"
+    },
+    {
+      "source": "/login.html",
+      "destination": "/frontend/login.html"
     }
   ]
 }
