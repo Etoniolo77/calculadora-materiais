@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -52,8 +53,15 @@
     }
 
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .header {
@@ -151,8 +159,15 @@
     }
 
     @keyframes slideIn {
-      from { opacity: 0; transform: translateY(-10px); }
-      to { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .status-msg.err {
@@ -209,7 +224,9 @@
     }
 
     @keyframes spin {
-      to { transform: rotate(360deg); }
+      to {
+        transform: rotate(360deg);
+      }
     }
 
     .footer-info {
@@ -219,10 +236,11 @@
       color: var(--text-muted);
     }
   </style>
-  
+
   <!-- Supabase JS Client Library -->
   <script src="/frontend/supabase.min.js"></script>
 </head>
+
 <body>
 
   <div class="container">
@@ -363,8 +381,34 @@
       try {
         if (activeTab === 'login') {
           // Realizar login no Supabase
-          const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+          const {
+            data: loginData,
+            error,
+          } = await supabaseClient.auth.signInWithPassword({ email, password });
           if (error) throw error;
+
+          const accessToken = loginData?.session?.access_token;
+          if (!accessToken) {
+            throw new Error("Sessão Supabase inválida após login.");
+          }
+
+          const syncResp = await fetch('/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: accessToken }),
+          });
+
+          if (!syncResp.ok) {
+            let detail = `Falha ao sincronizar sessão com backend (${syncResp.status}).`;
+            try {
+              const data = await syncResp.json();
+              detail = data?.detail || data?.message || detail;
+            } catch (_e) {
+              const text = await syncResp.text();
+              if (text) detail = text;
+            }
+            throw new Error(detail);
+          }
 
           // Redirecionar ao index
           showStatus("Acesso autorizado! Redirecionando...", true);
@@ -391,4 +435,5 @@
     initSupabase();
   </script>
 </body>
+
 </html>

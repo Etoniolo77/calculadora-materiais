@@ -844,7 +844,14 @@ async function ensureAuthenticatedSession() {
       throw error;
     }
     if (session?.access_token) {
-      return true;
+      const syncResp = await fetch("/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: session.access_token }),
+      });
+      if (syncResp.ok) {
+        return true;
+      }
     }
   } catch (_err) {
     // segue para redirecionamento
