@@ -14,6 +14,22 @@
       "destination": "/api/index.py"
     },
     {
+      "source": "/styles.css",
+      "destination": "/frontend/styles.css"
+    },
+    {
+      "source": "/app.js",
+      "destination": "/frontend/app.js"
+    },
+    {
+      "source": "/supabase.min.js",
+      "destination": "/frontend/supabase.min.js"
+    },
+    {
+      "source": "/favicon.svg",
+      "destination": "/frontend/favicon.svg"
+    },
+    {
       "source": "/",
       "destination": "/frontend/index.html"
     },
