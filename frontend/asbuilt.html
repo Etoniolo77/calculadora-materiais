@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora de Materiais - As-built</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: #f3f6fa;
+      color: #111827;
+    }
+    .container { width: min(1600px, calc(100vw - 32px)); max-width: 1600px; margin: 0 auto; padding: 24px; }
+    .appHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+    .headerActions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .subtitle { margin-top: 4px; color: #4b5563; }
+    .card { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; margin-top: 14px; }
+    .card h2 { margin-top: 0; font-size: 18px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+    .tableWrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f8fafc; }
+    button { border: 1px solid #0f766e; background: #0f766e; color: #fff; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .btnSecondary { background: #fff; color: #0f766e; }
+    .headerActions .btnSecondary {
+      background: #ffffff !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+      font-weight: 700;
+    }
+    .headerActions .btnSecondary:hover {
+      background: #f8fafc !important;
+      color: #0f172a !important;
+      border-color: #94a3b8 !important;
+    }
+    input, select, textarea { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+    .status { margin: 10px 0 0; min-height: 1.2em; }
+    .status.ok { color: #166534; }
+    .status.err { color: #b91c1c; }
+    .groupedViewBox { margin-top: 16px; }
+    .groupedViewHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  </style>
+  <link rel="stylesheet" href="styles.css?v=1.0.34" />
+</head>
+
+<body data-app-mode="asbuilt">
+  <main class="container">
+    <header class="appHeader">
+      <div>
+        <h1>Calculadora de Materiais - As-built</h1>
+        <p id="appVersionInfo" class="subtitle">Versao 1.0.34 | Autor: Evandro C. Toniolo</p>
+      </div>
+      <div class="headerActions">
+        <button id="btnGoProgramacao" type="button" class="btnSecondary">Programacao</button>
+        <button id="btnLogout" type="button" class="btnSecondary">Sair</button>
+      </div>
+    </header>
+    <p id="updateStatus" class="status"></p>
+
+    <div class="layoutShell">
+      <div class="inputsColumn">
+        <section class="card">
+          <h2>1. Dados do Projeto</h2>
+          <div class="projectGrid">
+            <label>Ordem<input id="ordem" type="text" /></label>
+            <label>Equipe<input id="equipe" type="text" /></label>
+            <label class="span2">Fiscal<input id="fiscal" type="text" /></label>
+          </div>
+          <label>Observacoes
+            <textarea id="observacoes" rows="3" placeholder="Observacoes para o relatorio PDF"></textarea>
+          </label>
+        </section>
+
+        <section class="card">
+          <h2>2. Postes (edicao assistida)</h2>
+          <div class="row">
+            <button id="btnAddPole" type="button">Adicionar Poste</button>
+          </div>
+          <div class="tableWrap">
+            <table id="polesTable">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Tipo Poste</th>
+                  <th>Estruturas</th>
+                  <th>Trafo</th>
+                  <th>ID Trafo</th>
+                  <th>Chave</th>
+                  <th>Estai Qtd</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>3. Cabos (edicao assistida)</h2>
+          <div class="row">
+            <button id="btnAddCable" type="button">Adicionar Cabo</button>
+          </div>
+          <div class="tableWrap">
+            <table id="cablesTable">
+              <thead>
+                <tr>
+                  <th>Tipo</th>
+                  <th>Descricao</th>
+                  <th>Qtd (m)</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="resultsColumn">
+        <section class="card cardResults">
+          <div class="resultsTop">
+            <h2>4. Calculo</h2>
+            <div class="row actionsRow">
+              <button id="btnCalculate">Calcular BOM</button>
+              <button id="btnDownloadCsv" disabled>Baixar CSV</button>
+              <button id="btnDownloadPdf" disabled>Baixar PDF</button>
+              <button id="btnSendWhatsapp" disabled>Enviar WhatsApp</button>
+            </div>
+            <p id="calcStatus" class="status"></p>
+            <div class="resultsMetaScroll">
+              <div id="validationBox"></div>
+              <div id="structureAuditBox"></div>
+              <div id="qualityGateBox"></div>
+              <div id="recommendationsBox"></div>
+            </div>
+          </div>
+          <div class="resultsScroll">
+            <div class="tableWrap">
+              <table id="bomTable">
+                <thead>
+                  <tr>
+                    <th>Codigo SAP</th>
+                    <th>Descricao</th>
+                    <th>Qdte</th>
+                    <th>Confianca</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="supabase.min.js?v=1.0.34"></script>
+  <script src="app.js?v=1.0.34"></script>
+</body>
+
+</html>

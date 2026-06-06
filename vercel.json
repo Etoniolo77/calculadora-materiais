@@ -1,0 +1,57 @@
+{
+  "cleanUrls": false,
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/auth/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/styles.css",
+      "destination": "/frontend/styles.css"
+    },
+    {
+      "source": "/app.js",
+      "destination": "/frontend/app.js"
+    },
+    {
+      "source": "/supabase.min.js",
+      "destination": "/frontend/supabase.min.js"
+    },
+    {
+      "source": "/favicon.svg",
+      "destination": "/frontend/favicon.svg"
+    },
+    {
+      "source": "/",
+      "destination": "/frontend/index.html"
+    },
+    {
+      "source": "/index.html",
+      "destination": "/frontend/index.html"
+    },
+    {
+      "source": "/as-built",
+      "destination": "/frontend/asbuilt.html"
+    },
+    {
+      "source": "/asbuilt.html",
+      "destination": "/frontend/asbuilt.html"
+    },
+    {
+      "source": "/login",
+      "destination": "/frontend/login.html"
+    },
+    {
+      "source": "/login.html",
+      "destination": "/frontend/login.html"
+    }
+  ]
+}

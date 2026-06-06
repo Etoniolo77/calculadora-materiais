@@ -1,5 +1,10 @@
-streamlit
 pandas
 pdfplumber
 reportlab
 openpyxl
+fastapi
+python-multipart
+python-jose[cryptography]
+python-dotenv
+requests
+psycopg2-binary

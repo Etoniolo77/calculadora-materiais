@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora de Materiais - FastAPI</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: #f3f6fa;
+      color: #111827;
+    }
+    .container { width: min(1600px, calc(100vw - 32px)); max-width: 1600px; margin: 0 auto; padding: 24px; }
+    .appHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+    .headerActions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .subtitle { margin-top: 4px; color: #4b5563; }
+    .card { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; margin-top: 14px; }
+    .card h2 { margin-top: 0; font-size: 18px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+    .tableWrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f8fafc; }
+    button { border: 1px solid #0f766e; background: #0f766e; color: #fff; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .btnSecondary { background: #fff; color: #0f766e; }
+    .headerActions .btnSecondary {
+      background: #ffffff !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+      font-weight: 700;
+    }
+    .headerActions .btnSecondary:hover {
+      background: #f8fafc !important;
+      color: #0f172a !important;
+      border-color: #94a3b8 !important;
+    }
+    input, select, textarea { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+    .status { margin: 10px 0 0; min-height: 1.2em; }
+    .status.ok { color: #166534; }
+    .status.err { color: #b91c1c; }
+    .groupedViewBox { margin-top: 16px; }
+    .groupedViewHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  </style>
+  <link rel="stylesheet" href="styles.css?v=1.0.34" />
+</head>
+
+<body data-app-mode="programacao">
+  <main class="container">
+    <header class="appHeader">
+      <div>
+        <h1>Calculadora de Materiais</h1>
+        <p id="appVersionInfo" class="subtitle">Versao 1.0.34 | Autor: Evandro C. Toniolo</p>
+      </div>
+      <div class="headerActions">
+        <button id="btnGoAsBuilt" type="button" class="btnSecondary">As-built</button>
+        <button id="btnLogout" type="button" class="btnSecondary">Sair</button>
+      </div>
+    </header>
+    <p id="updateStatus" class="status"></p>
+
+    <div class="layoutShell">
+      <div class="inputsColumn">
+        <section class="card">
+          <h2>1. Extracao do PDF</h2>
+          <div class="row">
+            <input id="pdfFile" type="file" accept=".pdf" />
+          </div>
+          <p id="extractStatus" class="status"></p>
+        </section>
+
+        <section class="card">
+          <h2>2. Dados do Projeto</h2>
+          <div class="projectGrid">
+            <label>Ordem<input id="ordem" type="text" /></label>
+            <label>Equipe<input id="equipe" type="text" /></label>
+            <label class="span2">Programador<input id="programador" type="text" /></label>
+          </div>
+          <label>Observacoes
+            <textarea id="observacoes" rows="3" placeholder="Observacoes para o relatorio PDF"></textarea>
+          </label>
+        </section>
+
+        <section class="card">
+          <h2>3. Postes (edicao assistida)</h2>
+          <div class="row">
+            <button id="btnAddPole" type="button">Adicionar Poste</button>
+          </div>
+          <div class="tableWrap">
+            <table id="polesTable">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Tipo Poste</th>
+                  <th>Estruturas</th>
+                  <th>Trafo</th>
+                  <th>ID Trafo</th>
+                  <th>Chave</th>
+                  <th>Estai Qtd</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>4. Cabos (edicao assistida)</h2>
+          <div class="row">
+            <button id="btnAddCable" type="button">Adicionar Cabo</button>
+          </div>
+          <div class="tableWrap">
+            <table id="cablesTable">
+              <thead>
+                <tr>
+                  <th>Tipo</th>
+                  <th>Descricao</th>
+                  <th>Qtd (m)</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="resultsColumn">
+        <section class="card cardResults">
+          <div class="resultsTop">
+            <h2>5. Calculo</h2>
+            <div class="row actionsRow">
+              <button id="btnCalculate">Calcular BOM</button>
+              <button id="btnDownloadCsv" disabled>Baixar CSV</button>
+              <button id="btnDownloadPdf" disabled>Baixar PDF</button>
+              <button id="btnSendWhatsapp" disabled>Enviar WhatsApp</button>
+            </div>
+            <p id="calcStatus" class="status"></p>
+            <div class="resultsMetaScroll">
+              <div id="validationBox"></div>
+              <div id="structureAuditBox"></div>
+              <div id="qualityGateBox"></div>
+              <div id="recommendationsBox"></div>
+            </div>
+          </div>
+          <div class="resultsScroll">
+            <div class="tableWrap">
+              <table id="bomTable">
+                <thead>
+                  <tr>
+                    <th>Codigo SAP</th>
+                    <th>Descricao</th>
+                    <th>Qdte</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>30053132</td><td>CINTA ACO INOX 100MM</td><td>4</td></tr>
+                  <tr><td>30050155</td><td>ALCA MT 25MM NU</td><td>2</td></tr>
+                  <tr><td>30042011</td><td>POSTE CONCRETO 11M 300DAN</td><td>1</td></tr>
+                  <tr><td>30018744</td><td>CABO XLPE 35MM BT</td><td>120</td></tr>
+                  <tr><td>30019001</td><td>CHAVE FACA MT TRIPOLAR</td><td>1</td></tr>
+                  <tr><td>30051200</td><td>CONECTOR CUNHA AL 35MM</td><td>6</td></tr>
+                  <tr><td>30022890</td><td>TRANSFORMADOR 15KVA 13.8/0.22KV</td><td>1</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="groupedViewBox">
+              <div class="groupedViewHeader">
+                <h3>Conferencia Agrupada por Poste</h3>
+                <div class="groupedViewControls">
+                  <label for="bomPoleSelect">Poste</label>
+                  <select id="bomPoleSelect"></select>
+                </div>
+              </div>
+              <div class="tableWrap">
+                <table id="bomPoleTable">
+                  <thead>
+                    <tr>
+                      <th>Codigo SAP</th>
+                      <th>Descricao</th>
+                      <th>Qdte</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>30053132</td><td>CINTA ACO INOX 100MM</td><td>2</td></tr>
+                    <tr><td>30050155</td><td>ALCA MT 25MM NU</td><td>1</td></tr>
+                    <tr><td>30042011</td><td>POSTE CONCRETO 11M 300DAN</td><td>1</td></tr>
+                    <tr><td>30051200</td><td>CONECTOR CUNHA AL 35MM</td><td>3</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <!-- Modal: Enviar BOM por WhatsApp -->
+  <div id="whatsappModal" class="waMod" hidden aria-modal="true" role="dialog" aria-labelledby="waModalTitle">
+    <div class="waModBackdrop" id="waModBackdrop"></div>
+    <div class="waModContent">
+      <div class="waModHeader">
+        <h3 id="waModalTitle">Enviar BOM por WhatsApp</h3>
+        <button type="button" class="waModClose" id="btnCloseWaModal" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="waModBody">
+        <ol class="waModSteps">
+          <li>O PDF da BOM sera baixado automaticamente</li>
+          <li>O WhatsApp abrira com a mensagem pronta para voce selecionar o contato</li>
+          <li>No WhatsApp, clique no clipe e selecione o PDF da pasta Downloads</li>
+        </ol>
+        <label class="waModLabel" for="waPhone">Telefone (opcional)
+          <input type="tel" id="waPhone" placeholder="+55 11 99999-9999" autocomplete="tel" />
+          <span class="waModHint">Se informado, abre direto no chat do contato</span>
+        </label>
+        <div id="waRecentBox" class="waRecentBox" hidden>
+          <span class="waRecentLabel">Recentes:</span>
+          <div id="waRecentList" class="waRecentList"></div>
+        </div>
+        <label class="waModLabel" for="waMessage">Mensagem
+          <textarea id="waMessage" rows="4"></textarea>
+        </label>
+      </div>
+      <div class="waModFooter">
+        <button type="button" id="btnCancelWa" class="btnSecondary">Cancelar</button>
+        <button type="button" id="btnPrepareWa">Preparar Envio</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Banner: instrucao pos-abertura do WhatsApp -->
+  <div id="waBanner" class="waBanner" hidden role="status">
+    <div class="waBannerInner">
+      <strong>PDF baixado.</strong> No WhatsApp, clique no <strong>clipe</strong> (icone de anexo) e selecione o arquivo em Downloads.
+      <button type="button" id="btnCloseWaBanner" class="waBannerClose" aria-label="Fechar">&times;</button>
+    </div>
+  </div>
+
+  <script src="supabase.min.js?v=1.0.34"></script>
+  <script src="app.js?v=1.0.34"></script>
+</body>
+
+</html>

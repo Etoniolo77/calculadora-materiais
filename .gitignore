@@ -11,8 +11,12 @@ __pycache__/
 *.pkl
 database_cache.pkl
 *.log
+*.pid
 *.csv
 .DS_Store
+storage/tmp/
+build/
+backend_runtime/
 
 # Documentos Gerados
 Relatorio_Final_Sample.pdf
@@ -22,3 +26,7 @@ Lista_Material_Calculada.csv
 .venv/
 venv/
 env/
+.vercel
+
+# Segredos locais (nunca versionar)
+backend/.env
