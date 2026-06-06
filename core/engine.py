@@ -86,6 +86,15 @@ SMTR_VARIANTS = [
     "SMTR - CABO MULT XLPENI AL 3C 2X35MM2+35MM2 1KV",
 ]
 
+SMFL_VARIANTS = [
+    "SMFL - CABO AL 3C 2X120MM2+70MM2 1KV",
+    "SMFL - CABO AL 3C 2X70MM2+70MM2 1KV",
+    "SMFL - CABO AL 4C 3X35MM2+35MM2 1KV",
+    "SMFL - CABO AL 4C 3X70MM2+70MM2 1KV",
+    "SMFL - CABO AL PE RET 4C 3X120MM2 70MM2 1KV",
+    "SMFL - CABO MULT XLPENI AL 3C 2X35MM2+35MM2 1KV",
+]
+
 # Adesivos refletivos para identificação de trafo (ESTF + 6 dígitos).
 ESTF_STICKER_MAP = {
     "A": "30058669",
@@ -209,6 +218,7 @@ class MaterialEngine:
         self.db_loader = None
         self.detected_cables = {"MT": None, "BT": None}
         self.selected_smtr_structure = None
+        self.selected_smfl_structure = None
         self.current_trafo_context = None
         self.current_estai_context = None
         self.audit_log = []
@@ -501,6 +511,10 @@ class MaterialEngine:
             smtr_variant = self.selected_smtr_structure or self._detect_smtr_variant()
             if smtr_variant and self._structure_exists_in_db(smtr_variant, pole_type):
                 return smtr_variant, True
+        if raw == "SMFL":
+            smfl_variant = self.selected_smfl_structure or self._detect_smfl_variant()
+            if smfl_variant and self._structure_exists_in_db(smfl_variant, pole_type):
+                return smfl_variant, True
         if aliased != raw and self._structure_exists_in_db(aliased, pole_type):
             return aliased, True
 
@@ -561,6 +575,64 @@ class MaterialEngine:
                 return "SMTR - CABO AL 4C 3X35MM2+35MM2 1KV"
             if "2X12070" in compact:
                 return "SMTR - CABO AL 3C 2X120MM2+70MM2 1KV"
+            # 3X120+70: no catálogo só existe a variante PE RET (polietileno
+            # reticulado), então 3X120(70) mapeia para ela mesmo sem o termo "PE RET".
+            if "3X12070" in compact or ("3X120" in desc and "70" in desc):
+                return "SMTR - CABO AL PE RET 4C 3X120MM2 70MM2 1KV"
+
+        return None
+
+    def _detect_smfl_variant(self, cables_list=None):
+        """Resolve SMFL para a variante correta com base no cabo BT detectado.
+        Segue o mesmo padrão de _detect_smtr_variant."""
+        cable_descs = []
+        if cables_list:
+            cable_descs.extend(
+                str(c.get("Desc", "") or "").upper() for c in cables_list if c
+            )
+        for key in ("BT", "MT"):
+            val = str(self.detected_cables.get(key, "") or "").upper().strip()
+            if val:
+                cable_descs.append(val)
+
+        if not cable_descs:
+            return None
+
+        for desc in cable_descs:
+            compact = re.sub(r"[^A-Z0-9]+", "", desc.upper())
+            if "XLPENI" in desc and "35" in desc:
+                return "SMFL - CABO MULT XLPENI AL 3C 2X35MM2+35MM2 1KV"
+            if (
+                any(term in desc for term in ["PE RET", "PRET", "PE RET."])
+                and "120" in desc
+                and "70" in desc
+            ):
+                return "SMFL - CABO AL PE RET 4C 3X120MM2 70MM2 1KV"
+            if "3X70" in desc and any(
+                term in desc for term in ["(70)", "+70", "70MM2"]
+            ):
+                return "SMFL - CABO AL 4C 3X70MM2+70MM2 1KV"
+            if "2X70" in desc and any(
+                term in desc for term in ["(70)", "+70", "70MM2"]
+            ):
+                return "SMFL - CABO AL 3C 2X70MM2+70MM2 1KV"
+            if "3X35" in desc and any(
+                term in desc for term in ["(35)", "+35", "35MM2"]
+            ):
+                return "SMFL - CABO AL 4C 3X35MM2+35MM2 1KV"
+            if "2X120" in desc or "120MM2+70MM2" in desc:
+                return "SMFL - CABO AL 3C 2X120MM2+70MM2 1KV"
+            if "3X7070" in compact:
+                return "SMFL - CABO AL 4C 3X70MM2+70MM2 1KV"
+            if "2X7070" in compact:
+                return "SMFL - CABO AL 3C 2X70MM2+70MM2 1KV"
+            if "3X3535" in compact:
+                return "SMFL - CABO AL 4C 3X35MM2+35MM2 1KV"
+            if "2X12070" in compact:
+                return "SMFL - CABO AL 3C 2X120MM2+70MM2 1KV"
+            # 3X120+70: no catálogo só existe a variante PE RET.
+            if "3X12070" in compact or ("3X120" in desc and "70" in desc):
+                return "SMFL - CABO AL PE RET 4C 3X120MM2 70MM2 1KV"
 
         return None
 
@@ -657,7 +729,9 @@ class MaterialEngine:
             s = float(score)
         except (ValueError, TypeError):
             return 0.85
-        
+        if s != s or s in (float("inf"), float("-inf")):
+            return 0.85
+
         # Para pg_trgm (similaridade 0..1):
         # 0.30 é um match sólido (~75% de confiança)
         # 0.50 é um match excelente (~90% de confiança)
@@ -683,7 +757,13 @@ class MaterialEngine:
         if correction:
             mat["Código SAP"] = correction.get("sap", mat.get("Código SAP"))
             mat["Descrição"] = correction.get("descricao", mat.get("Descrição"))
-            mat["Confiança"] = max(float(mat.get("Confiança", 0.2)), 0.95)
+            try:
+                confidence = float(mat.get("Confiança", 0.2))
+            except (TypeError, ValueError):
+                confidence = 0.2
+            if confidence != confidence or confidence in (float("inf"), float("-inf")):
+                confidence = 0.2
+            mat["Confiança"] = max(confidence, 0.95)
             mat["Origem"] = f"{mat.get('Origem', '')} [CORRECAO-MANUAL]".strip()
         return mat
 
@@ -691,7 +771,10 @@ class MaterialEngine:
         """Garante que todo material tenha campo de confiança."""
         if "Confiança" in mat:
             try:
-                mat["Confiança"] = float(mat["Confiança"])
+                conf = float(mat["Confiança"])
+                if conf != conf or conf in (float("inf"), float("-inf")):
+                    raise ValueError("invalid confidence")
+                mat["Confiança"] = conf
                 return mat
             except (ValueError, TypeError):
                 pass
@@ -886,11 +969,17 @@ class MaterialEngine:
     def resolve_clamps(self, pole_type, structures, p_id=""):
         """Retorna as braçadeiras E materiais das estruturas baseado no poste e estruturas."""
         mats = []
+        def add_mat(material):
+            material["pole_id"] = p_id
+            mats.append(material)
+
         p_type = self._normalize_pole_type(str(pole_type).upper())
         p_type_norm = p_type.replace("x", "/").replace(" ", "")
         is_dt_pole = p_type_norm.startswith("DT") or p_type_norm.startswith("D")
         p_id_label = p_id if p_id else p_type_norm
         expanded_structures = self._expand_composite_structures(structures)
+        structure_resolution_cache = {}
+        structure_materials_cache = {}
         est_cats_with_clamp_logic = set()
         # Contador por categoria para permitir variação por nível quando
         # houver estruturas repetidas no mesmo poste (ex.: B2F 1º/2º).
@@ -914,7 +1003,7 @@ class MaterialEngine:
         if "(E)" not in pole_str and "(R)" not in pole_str:
             p_clean = pole_str.split("(")[0].strip()
             p_code, p_desc = self.get_pole_sap(p_clean)
-            mats.append(
+            add_mat(
                 {
                     "Origem": f"Poste {p_id}",
                     "Código SAP": p_code,
@@ -929,10 +1018,17 @@ class MaterialEngine:
                 est = str(est_raw).upper().strip()
                 if "(E)" in est or "(R)" in est:
                     continue
-                est_canonical, _ = self._resolve_structure_code(est, pole_type)
-                structure_materials = self.db_loader.explode_structure(
-                    est_canonical, pole_type_str=pole_type
-                )
+                cache_key = (est, pole_type)
+                if cache_key not in structure_resolution_cache:
+                    structure_resolution_cache[cache_key] = self._resolve_structure_code(
+                        est, pole_type
+                    )
+                est_canonical, _ = structure_resolution_cache[cache_key]
+                if cache_key not in structure_materials_cache:
+                    structure_materials_cache[cache_key] = self.db_loader.explode_structure(
+                        est_canonical, pole_type_str=pole_type
+                    )
+                structure_materials = structure_materials_cache[cache_key]
                 if any(
                     str(sm.get("code", "")).strip() == CROSSARM_STD
                     for sm in structure_materials
@@ -955,8 +1051,8 @@ class MaterialEngine:
                 # ET4A segue estritamente a composição do banco revisado.
                 # Sem complemento por lógica genérica de ferragens.
                 continue
-            if est == "SMTR":
-                # SMTR deve seguir estritamente a composição da base (especialista),
+            if est == "SMTR" or est.startswith("SMFL"):
+                # SMTR/SMFL devem seguir estritamente a composição da base (especialista),
                 # sem complemento pela lógica genérica de ferragens.
                 continue
             est_cat = self._get_est_category(est)
@@ -982,7 +1078,7 @@ class MaterialEngine:
                         if self.db_loader
                         else None
                     ) or f"BRACADEIRA SAP {sap}"
-                    mats.append(
+                    add_mat(
                         {
                             "Origem": f"Ferragem {est} em {p_id}",
                             "Código SAP": sap,
@@ -998,7 +1094,7 @@ class MaterialEngine:
                             if self.db_loader
                             else None
                         ) or f"BRACADEIRA SAP {sap}"
-                        mats.append(
+                        add_mat(
                             {
                                 "Origem": f"Ferragem {est} em {p_id}",
                                 "Código SAP": sap,
@@ -1061,7 +1157,7 @@ class MaterialEngine:
                         "ET1T",
                         "ET4A",
                         "SMTR",
-                    } or est.startswith("SMTR")
+                    } or est.startswith("SMTR") or est.startswith("SMFL")
 
                     desc_upper = desc.upper()
                     is_cinta_bracadeira = (
@@ -1071,7 +1167,7 @@ class MaterialEngine:
                     ) and "ALÇA" not in desc_upper
 
                     if strict_db_structure:
-                        mats.append(
+                        add_mat(
                             {
                                 "Origem": f"Estrutura {est} em {p_id}",
                                 "Código SAP": code,
@@ -1087,6 +1183,7 @@ class MaterialEngine:
                         is_cinta_bracadeira
                         and est_cat in est_cats_with_clamp_logic
                         and est not in {"SMTR", "ET1T", "ET4A", "B2F"}
+                        and not est.startswith("SMFL")
                     ):
                         continue
 
@@ -1187,7 +1284,7 @@ class MaterialEngine:
                                 if self.db_loader
                                 else m_sap
                             )
-                            mats.append(
+                            add_mat(
                                 {
                                     "Origem": f"Estrutura {est} (Manual)",
                                     "Código SAP": m_sap,
@@ -1219,7 +1316,7 @@ class MaterialEngine:
                             else str(resolved_desc)
                         )
 
-                    mats.append(
+                    add_mat(
                         {
                             "Origem": f"Estrutura {est} em {p_id}",
                             "Código SAP": code,
@@ -1237,7 +1334,7 @@ class MaterialEngine:
                         if (not current_est_has_crossarm) and (
                             not pole_has_crossarm_from_structure
                         ):
-                            mats.append(
+                            add_mat(
                                 {
                                     "Origem": f"Suporte em {p_id}",
                                     "Código SAP": CROSSARM_STD,
@@ -1252,56 +1349,62 @@ class MaterialEngine:
         # - Duplo nível (ex.: B2F 1º/2º): usa distribuição revisada
         # - Simples com ET1T: usa distribuição revisada
         if b2f_count_on_pole >= 2:
-            mats.extend(
-                [
-                    {
-                        "Origem": f"Ferragem B2F em {p_id}",
-                        "Código SAP": "30053141",
-                        "Descrição": self.db_loader.get_sap_description("30053141"),
-                        "Quantidade": 3,
-                    },
-                    {
-                        "Origem": f"Estrutura B2F em {p_id}",
-                        "Código SAP": "30058120",
-                        "Descrição": self.db_loader.get_sap_description("30058120"),
-                        "Quantidade": 5,
-                    },
-                    {
-                        "Origem": f"Estrutura B2F em {p_id}",
-                        "Código SAP": "30058097",
-                        "Descrição": self.db_loader.get_sap_description("30058097"),
-                        "Quantidade": 2,
-                    },
-                ]
+            add_mat(
+                {
+                    "Origem": f"Ferragem B2F em {p_id}",
+                    "Código SAP": "30053141",
+                    "Descrição": self.db_loader.get_sap_description("30053141"),
+                    "Quantidade": 3,
+                }
+            )
+            add_mat(
+                {
+                    "Origem": f"Estrutura B2F em {p_id}",
+                    "Código SAP": "30058120",
+                    "Descrição": self.db_loader.get_sap_description("30058120"),
+                    "Quantidade": 5,
+                }
+            )
+            add_mat(
+                {
+                    "Origem": f"Estrutura B2F em {p_id}",
+                    "Código SAP": "30058097",
+                    "Descrição": self.db_loader.get_sap_description("30058097"),
+                    "Quantidade": 2,
+                }
             )
         elif b2f_count_on_pole == 1 and has_et1t_on_pole:
-            mats.extend(
-                [
-                    {
-                        "Origem": f"Ferragem B2F em {p_id}",
-                        "Código SAP": "30053140",
-                        "Descrição": self.db_loader.get_sap_description("30053140"),
-                        "Quantidade": 1,
-                    },
-                    {
-                        "Origem": f"Ferragem B2F em {p_id}",
-                        "Código SAP": "30053141",
-                        "Descrição": self.db_loader.get_sap_description("30053141"),
-                        "Quantidade": 3,
-                    },
-                    {
-                        "Origem": f"Estrutura B2F em {p_id}",
-                        "Código SAP": "30058120",
-                        "Descrição": self.db_loader.get_sap_description("30058120"),
-                        "Quantidade": 3,
-                    },
-                    {
-                        "Origem": f"Estrutura B2F em {p_id}",
-                        "Código SAP": "30058097",
-                        "Descrição": self.db_loader.get_sap_description("30058097"),
-                        "Quantidade": 3,
-                    },
-                ]
+            add_mat(
+                {
+                    "Origem": f"Ferragem B2F em {p_id}",
+                    "Código SAP": "30053140",
+                    "Descrição": self.db_loader.get_sap_description("30053140"),
+                    "Quantidade": 1,
+                }
+            )
+            add_mat(
+                {
+                    "Origem": f"Ferragem B2F em {p_id}",
+                    "Código SAP": "30053141",
+                    "Descrição": self.db_loader.get_sap_description("30053141"),
+                    "Quantidade": 3,
+                }
+            )
+            add_mat(
+                {
+                    "Origem": f"Estrutura B2F em {p_id}",
+                    "Código SAP": "30058120",
+                    "Descrição": self.db_loader.get_sap_description("30058120"),
+                    "Quantidade": 3,
+                }
+            )
+            add_mat(
+                {
+                    "Origem": f"Estrutura B2F em {p_id}",
+                    "Código SAP": "30058097",
+                    "Descrição": self.db_loader.get_sap_description("30058097"),
+                    "Quantidade": 3,
+                }
             )
 
         return mats
@@ -1357,8 +1460,11 @@ class MaterialEngine:
             self._prime_detected_cables(cables_list)
         if not self.selected_smtr_structure:
             self.selected_smtr_structure = self._detect_smtr_variant(cables_list)
+        if not self.selected_smfl_structure:
+            self.selected_smfl_structure = self._detect_smfl_variant(cables_list)
 
         smtr_seen = False
+        smfl_seen = False
 
         for p_id, data in sorted((pole_map or {}).items(), key=lambda kv: kv[0]):
             pole_type = self._normalize_pole_type(data.get("Pole", "Desconhecido"))
@@ -1375,11 +1481,15 @@ class MaterialEngine:
                     continue
 
                 # Regra global já aplicada no cálculo principal:
-                # SMTR é processada apenas uma vez por projeto.
+                # SMTR/SMFL são processadas apenas uma vez por projeto.
                 if est_up == "SMTR":
                     if smtr_seen:
                         continue
                     smtr_seen = True
+                if est_up == "SMFL":
+                    if smfl_seen:
+                        continue
+                    smfl_seen = True
 
                 report["total_structures"] += 1
 
@@ -1754,9 +1864,11 @@ class MaterialEngine:
         self.audit_log = []
         results = []
         smtr_applied = False
+        smfl_applied = False
         self.detected_cables = {"MT": None, "BT": None}
         self._prime_detected_cables(cables_list)
         self.selected_smtr_structure = self._detect_smtr_variant(cables_list)
+        self.selected_smfl_structure = self._detect_smfl_variant(cables_list)
 
         # Detecção de classe de tensão (HV vs KV) do projeto
         project_voltage_class = "HV"
@@ -1799,12 +1911,28 @@ class MaterialEngine:
             ests = list(data.get("Est", []) or [])
             self.current_trafo_context = self._infer_trafo_context(pole_map, p_id)
             self.current_estai_context = data.get("Estai")
+            def add_result(material):
+                material["pole_id"] = p_id
+                results.append(material)
             if any(str(e).upper().strip() == "SMTR" for e in ests):
                 if smtr_applied:
                     ests = [e for e in ests if str(e).upper().strip() != "SMTR"]
                 else:
                     smtr_applied = True
-            clamp_mats = self.resolve_clamps(pole_type, ests, p_id=p_id)
+            if any(str(e).upper().strip() == "SMFL" for e in ests):
+                if smfl_applied:
+                    ests = [e for e in ests if str(e).upper().strip() != "SMFL"]
+                else:
+                    smfl_applied = True
+            # Passa o tipo CRU (com sufixo (E)/(R) preservado) para resolve_clamps:
+            # a normalização interna cuida das ferragens, e o marcador (E)/(R)
+            # precisa sobreviver para NÃO faturar o poste retrofit/existente.
+            raw_pole_for_clamps = str(data.get("Pole") or pole_type)
+            if "(E)" in raw_pole_for_clamps or "(R)" in raw_pole_for_clamps:
+                clamp_input = raw_pole_for_clamps
+            else:
+                clamp_input = pole_type
+            clamp_mats = self.resolve_clamps(clamp_input, ests, p_id=p_id)
             results.extend(clamp_mats)
             estf_codes = [
                 str(c or "").upper().strip()
@@ -1844,7 +1972,7 @@ class MaterialEngine:
                         ]
                     for tm in transf_mats:
                         tm["Origem"] = f"Trafo {p_id}"
-                        results.append(tm)
+                        add_result(tm)
 
                     # B. Incluir o Kit de Hardware (Acessórios)
                     kit_key = None
@@ -1868,7 +1996,7 @@ class MaterialEngine:
                                 "hardware_kits", {}
                             ).get(kit_key, [])
                             for m in kit_mats:
-                                results.append(
+                                add_result(
                                     {
                                         "Origem": f"Hardware Trafo {p_id}",
                                         "Código SAP": m["sap"],
@@ -1879,7 +2007,7 @@ class MaterialEngine:
 
                         # Injetar Suporte de Trafo para Postes Circulares
                         if "C" in str(pole_type).upper():
-                            results.append(
+                            add_result(
                                 {
                                     "Origem": f"Suporte Trafo {p_id}",
                                     "Código SAP": TRAFO_SUPPORT_TRI,
@@ -1905,7 +2033,7 @@ class MaterialEngine:
                     if not sap_sticker:
                         missing_tokens.add(tk)
                         continue
-                    results.append(
+                    add_result(
                         {
                             "Origem": f"Identificacao Trafo {p_id} ({code_txt})",
                             "Código SAP": sap_sticker,
@@ -1958,7 +2086,7 @@ class MaterialEngine:
                         chave_desc = best[1]
                         chave_conf = self._confidence_from_score(best[2])
 
-                results.append(
+                add_result(
                     {
                         "Origem": f"Chave {p_id}",
                         "Código SAP": chave_sap,
@@ -2006,7 +2134,7 @@ class MaterialEngine:
 
                 if estai_mats:
                     for em in estai_mats:
-                        results.append(
+                        add_result(
                             {
                                 "Origem": f"Estai {p_id}",
                                 "Código SAP": em.get("code", "VERIFICAR"),
@@ -2016,7 +2144,7 @@ class MaterialEngine:
                         )
                 else:
                     # Fallback seguro caso catálogo esteja indisponível.
-                    results.append(
+                    add_result(
                         {
                             "Origem": f"Estai {p_id}",
                             "Código SAP": "30056363",
@@ -2024,7 +2152,7 @@ class MaterialEngine:
                             "Quantidade": qtd_estai,
                         }
                     )
-                    results.append(
+                    add_result(
                         {
                             "Origem": f"Estai {p_id}",
                             "Código SAP": "30054507",
@@ -2045,7 +2173,7 @@ class MaterialEngine:
                     qtd_aterr = 0
 
             if qtd_aterr > 0:
-                results.append(
+                add_result(
                     {
                         "Origem": f"Aterramento {p_id}",
                         "Código SAP": "30056366",
@@ -2096,7 +2224,7 @@ class MaterialEngine:
                         desc_pr = best[1] + suffix
                         conf_pr = self._confidence_from_score(best[2])
 
-                results.append(
+                add_result(
                     {
                         "Origem": f"Para-Raio {p_id}",
                         "Código SAP": sap_pr,
@@ -2114,7 +2242,7 @@ class MaterialEngine:
 
                 if qtd_ramal > 0 and tipo_ramal:
                     code, desc = self.resolve_ramal_direct(tipo_ramal)
-                    results.append(
+                    add_result(
                         {
                             "Origem": f"Ramal {p_id}",
                             "Código SAP": code,
@@ -2123,9 +2251,42 @@ class MaterialEngine:
                         }
                     )
 
+        # --- REGRA DE FIXAÇÃO: parafuso M16 por cinta ---
+        # Toda cinta de poste (CINTA POSTE AC ZC) é fixada por 1 parafuso M16.
+        # Soma as cintas válidas por poste e injeta o parafuso correspondente
+        # (FASTENER_BOLT). Ignora cintas em retirada e SAP indefinido.
+        cinta_qty_by_pole: dict[str, float] = {}
+        for row in results:
+            desc = str(row.get("Descrição", "")).upper()
+            sap = str(row.get("Código SAP", "")).upper()
+            is_cinta = "CINTA" in desc or "BRAÇADEIRA" in desc or "BRACADEIRA" in desc
+            if is_cinta and "RETIRAD" not in desc and not sap.startswith("VERIFICAR"):
+                pid = str(row.get("pole_id", "") or "")
+                try:
+                    q = float(row.get("Quantidade", 0) or 0)
+                except (TypeError, ValueError):
+                    q = 0.0
+                if q > 0:
+                    cinta_qty_by_pole[pid] = cinta_qty_by_pole.get(pid, 0.0) + q
+        if cinta_qty_by_pole:
+            bolt_desc = "PARAFUSO CAB QUAD 16MM 125MM AC"
+            if self.db_loader and FASTENER_BOLT in getattr(self.db_loader, "sap_codes", {}):
+                bolt_desc = self.db_loader.sap_codes[FASTENER_BOLT]
+            for pid, q in cinta_qty_by_pole.items():
+                results.append({
+                    "Origem": f"Fixacao cinta {pid}",
+                    "Código SAP": FASTENER_BOLT,
+                    "Descrição": bolt_desc,
+                    "Quantidade": q,
+                    "pole_id": pid,
+                    "Confiança": 0.95,
+                })
+
         # Ajuste fino orientado por validação especialista para perfil ET4-U3-S3.
+        self.last_raw_results = [row.copy() for row in results]
         # Agregação Final
         results = self.aggregate_materials(results)
+        self.last_aggregated_results = [row.copy() for row in results]
         return results
 
     def aggregate_materials(self, materials_list):
@@ -2135,6 +2296,8 @@ class MaterialEngine:
             try:
                 q = float(value)
             except (TypeError, ValueError):
+                return 0
+            if q != q or q in (float("inf"), float("-inf")):
                 return 0
             if abs(q) < 1e-9:
                 return 0
@@ -2160,10 +2323,19 @@ class MaterialEngine:
 
             if key in aggregated:
                 aggregated[key]["Quantidade"] += mat["Quantidade"]
-                aggregated[key]["Confiança"] = min(
-                    float(aggregated[key].get("Confiança", 1.0)),
-                    float(mat.get("Confiança", 1.0)),
-                )
+                try:
+                    current_conf = float(aggregated[key].get("Confiança", 1.0))
+                except (TypeError, ValueError):
+                    current_conf = 1.0
+                try:
+                    incoming_conf = float(mat.get("Confiança", 1.0))
+                except (TypeError, ValueError):
+                    incoming_conf = 1.0
+                if current_conf != current_conf or current_conf in (float("inf"), float("-inf")):
+                    current_conf = 1.0
+                if incoming_conf != incoming_conf or incoming_conf in (float("inf"), float("-inf")):
+                    incoming_conf = 1.0
+                aggregated[key]["Confiança"] = min(current_conf, incoming_conf)
                 current_orig = aggregated[key]["Origem"]
                 new_orig = mat["Origem"]
                 if len(current_orig) < 150 and new_orig not in current_orig:
@@ -2178,6 +2350,8 @@ class MaterialEngine:
             try:
                 qty = float(item["Quantidade"])
             except (TypeError, ValueError):
+                qty = 0.0
+            if qty != qty or qty in (float("inf"), float("-inf")):
                 qty = 0.0
             if qty > 0:
                 filtered.append(item)

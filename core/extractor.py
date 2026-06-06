@@ -273,7 +273,7 @@ class ProjectExtractor:
         re.I,
     )
     # Regex para estrutura: N3F, N4F, B2, ET4A etc.
-    _BOX_EST_REGEX  = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|SMTR)$', re.I)
+    _BOX_EST_REGEX  = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|SMTR|SMTG|SMFL)$', re.I)
     # Regex para estruturas secundárias: 1-S3(1), 2-S4(1), 1S3(1)
     _BOX_SEC_REGEX  = re.compile(
         r'(\d+)[\s\-]*([A-Z]{1,2}\d+[A-Z0-9]*)(?:\((\d+)\))?', re.I
@@ -291,7 +291,7 @@ class ProjectExtractor:
         tk = str(token or "").strip().upper()
         if not tk:
             return False
-        if tk in {"SMTR"}:
+        if tk in {"SMTR", "SMTG", "SMFL"}:
             return True
         if re.match(r'^P\d+$', tk):
             return False
@@ -523,7 +523,7 @@ class ProjectExtractor:
                 pole_type = f"DT{altura}/{esforco}" if sufixo in {"DT", "D"} else f"C{altura}/{esforco}"
 
                 ests = []
-                for est in re.findall(r"\b(?:[A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ESTAI|SMTR)\b", line):
+                for est in re.findall(r"\b(?:[A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ESTAI|SMTR|SMTG|SMFL)\b", line):
                     e = est.strip().upper()
                     if e in {"MT", "BT"}:
                         continue
@@ -599,7 +599,7 @@ class ProjectExtractor:
 
                         block_text = " ".join(lines_text[max(0, idx - 2): min(len(lines_text), idx + 3)])
                         ests = []
-                        for est in re.findall(r"\b(?:[A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ESTAI|SMTR)\b", block_text):
+                        for est in re.findall(r"\b(?:[A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ESTAI|SMTR|SMTG|SMFL)\b", block_text):
                             est_u = est.strip().upper()
                             if est_u in {"MT", "BT"}:
                                 continue
@@ -730,9 +730,15 @@ class ProjectExtractor:
                 return None
             return _normalize_pole_type(m.group(1))
 
+        cumulative_y = 0.0
         with pdfplumber.open(self.pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 rect_zones, lines = self._analyze_page_visuals(page, i)
+                # Recalcular após popular visual_states: na construção do objeto
+                # visual_states está vazio, então o strict_new_only inicial (linha ~481)
+                # pode estar falso. _analyze_page_visuals popula o estado da página.
+                strict_new_only = any(v == 'NEW' for v in self.visual_states.values())
+                page_h_curr = page.height
                 raw_words = page.extract_words()
 
                 
@@ -826,7 +832,7 @@ class ProjectExtractor:
                         exact_pole_anchors.append(
                             {
                                 "id": f"P{int(exact_pid_match.group(1))}",
-                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2),
+                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2 + cumulative_y),
                                 "state": w.get("state"),
                             }
                         )
@@ -839,7 +845,7 @@ class ProjectExtractor:
                         new_struct_lines.append(
                             {
                                 "text": txt,
-                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2),
+                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2 + cumulative_y),
                                 "pole_type": pole_t,
                             }
                         )
@@ -847,7 +853,7 @@ class ProjectExtractor:
                         typed_struct_lines.append(
                             {
                                 "text": txt,
-                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2),
+                                "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2 + cumulative_y),
                                 "pole_type": pole_t,
                             }
                         )
@@ -864,7 +870,7 @@ class ProjectExtractor:
                     r'^(?:(?:MT|BT)\d+[Xx]|[Aa][Xx]\d+|\d+[Xx]\d)',
                     re.I
                 )
-                s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ET\d+[A-Z]*|BR\d+|SMTR)', re.I)
+                s_regex = re.compile(r'^([A-Z]{1,2}\d+[A-Z0-9]*|[1-4]S\d|ET\d+[A-Z]*|BR\d+|SMTR|SMTG|SMFL)', re.I)
                 trafo_regex = re.compile(r'(?:3\s*Ø\s*)?(\d+[,.]?\d*)\s*KVA', re.I)
 
                 def _is_metadata_noise(text: str) -> bool:
@@ -922,14 +928,24 @@ class ProjectExtractor:
                         # FILTRO 2: ignorar referencias GPS como 'P1= 301103.5 M'
                         # FILTRO 3: ignorar P_ID no meio de frase longa (ex: 'ARVORES ENTRE P1 E P2')
                         after_match = raw_text[p_match.end():].strip()
-                        is_gps_ref = after_match.startswith('=')
-                        is_in_sentence = len(raw_text) > 30 and p_match.start() > 5
+                        # Referência GPS/coordenada da legenda:
+                        #   'P1= 301103.5 M'  (formato com '=')
+                        #   'P10-313425/7754582'  (formato com traço + par UTM)
+                        is_gps_ref = (
+                            after_match.startswith('=')
+                            or bool(re.match(r'^[-=]\s*\d{5,}', after_match))
+                            or bool(re.search(r'\d{5,}\s*/\s*\d{5,}', raw_text))
+                        )
+                        # P_ID em rótulo técnico tem texto ANTES mas não depois (ex: "C12/300 P12").
+                        # P_ID em frase tem texto dos dois lados (ex: "arvores entre P1 e P2 foram...").
+                        is_in_sentence = len(raw_text) > 30 and p_match.start() > 5 and len(after_match) > 5
                         if word['top'] > 50 and not is_gps_ref and not is_in_sentence:
                             if p_id in pole_map:
                                 continue
+                            global_pos = (center[0], center[1] + cumulative_y)
                             pole_map[p_id] = {
                                 'id': p_id,
-                                'pos': center,
+                                'pos': global_pos,
                                 'Pole': 'Desconhecido',
                                 'Est': [],
                                 'Trafo': None,
@@ -982,10 +998,11 @@ class ProjectExtractor:
                                 (s_regex.match(text) and not _CABLE_STRUCT_RE.match(text) and self._is_valid_structure_token(text))
                                 or bool(exploded_for_label)
                             )
-                            if strict_new_only and word['state'] != 'NEW' and is_est:
-                                is_est = False
+                            # Não filtra aqui: estruturas EXISTING associadas a postes NEW
+                            # são aceitas na etapa de proximidade abaixo.
+                            global_center = (center[0], center[1] + cumulative_y)
                             labeled_items.append({
-                                'text': text, 'pos': center, 'state': state,
+                                'text': text, 'pos': global_center, 'state': state,
                                 'type': 'TYPE' if pole_token else (
                                     'TRAFO' if trafo_regex.search(text) else (
                                         'EST' if is_est else None
@@ -994,27 +1011,44 @@ class ProjectExtractor:
                             })
                             if pole_token and len(text) > 8:
                                 for sub in re.split(r'[,;+ ]+', text)[1:]:
-                                    if strict_new_only and state != 'NEW':
-                                        continue
                                     if s_regex.match(sub) and not _CABLE_STRUCT_RE.match(sub) and self._is_valid_structure_token(sub):
-                                        labeled_items.append({'text': sub, 'pos': center, 'state': state, 'type': 'EST'})
+                                        labeled_items.append({'text': sub, 'pos': global_center, 'state': state, 'type': 'EST'})
+
+                words_cumulative_y = cumulative_y
+                cumulative_y += page_h_curr
 
         # Associação por Proximidade (Nearest Neighbor)
         # Range ampliado para 999px para cobrir diagramas A3 inteiros
         for item in labeled_items:
             if not item['type'] or not pole_map: continue
-            
+
             best_p = None
             min_dist = 999999
-            
+            best_p_new = None
+            min_dist_new = 999999
+
             for p_id, p_data in pole_map.items():
                 dx = item['pos'][0] - p_data['pos'][0]
                 dy = item['pos'][1] - p_data['pos'][1]
                 dist = math.sqrt(dx**2 + dy**2)
-                
+
                 if dist < min_dist and dist < 999:   # range ampliado de 600→999
                     min_dist = dist
                     best_p = p_id
+
+                # Rastrear também o mais próximo com marcação NEW explícita
+                if dist < min_dist_new and dist < 999:
+                    if p_data.get('IsNew') or p_data.get('IsTypeNew'):
+                        min_dist_new = dist
+                        best_p_new = p_id
+
+            # Para itens EST em estado NEW: preferir poste NEW se estiver dentro
+            # de 1.5x a distância do mais próximo geral. Evita que poste EXISTENTE
+            # roube estrutura NEW de um poste adjacente IsTypeNew=True.
+            if (item['type'] == 'EST' and item.get('state') == 'NEW'
+                    and best_p_new is not None
+                    and min_dist_new <= min_dist * 1.5):
+                best_p = best_p_new
             
             if best_p:
                 p_data = pole_map[best_p]
@@ -1045,21 +1079,43 @@ class ProjectExtractor:
                         if not self._is_valid_structure_token(est_code):
                             continue
                         norm_text = self.normalize_term(est_code)
-                        # Regra dura: estrutura só entra como novo quando marcada NEW.
-                        if state == 'NEW':
-                            if norm_text not in p_data['Est']:
-                                p_data['Est'].append(norm_text)
+                        # Em modo revisão: aceitar estrutura NEW, ou EXISTING se poste-alvo é NEW.
+                        # Em modo normal (sem marcações): aceitar tudo.
+                        if strict_new_only and state != 'NEW' and not p_data.get('IsNew', False):
+                            continue
+                        if norm_text not in p_data['Est']:
+                            p_data['Est'].append(norm_text)
+                            if state == 'NEW':
+                                p_data['IsNewContent'] = True
+                                p_data.setdefault('EstNew', [])
+                                if norm_text not in p_data['EstNew']:
+                                    p_data['EstNew'].append(norm_text)
 
                 elif item['type'] == 'TRAFO':
+                    # Rejeitar NOTAS DESCRITIVAS em prosa (ex.:
+                    # "INSTALAÇÃO DE 1 TRANSFORMADOR DE 45KVA"): o trafo de um poste
+                    # vem de um rótulo COMPACTO (ex.: "3Ø45KVA", "TRI 45KVA"), nunca
+                    # de frase. Caso contrário o regex captura o kVA do texto da nota
+                    # e atribui um trafo fantasma ao poste mais próximo.
+                    # Verbos de ação só aparecem em NOTAS de serviço, nunca em
+                    # rótulos técnicos de trafo (que usam siglas: D_TF, TF, KVA...).
+                    _tnorm = text.upper()
+                    is_prose_note = (
+                        "INSTALA" in _tnorm
+                        or "SUBSTITU" in _tnorm
+                        or "RETIRAD" in _tnorm
+                        or "REMANEJ" in _tnorm
+                        or "PROVIS" in _tnorm
+                    )
                     is_trifasico = "3Ø" in text or "TRI" in text or ("3" in text.split("Ø")[0] if "Ø" in text else False)
                     is_bifasico  = "2Ø" in text or "BI" in text or ("2" in text.split("Ø")[0] if "Ø" in text else False)
                     kva_match = trafo_regex.search(text)
-                    if kva_match:
+                    if kva_match and not is_prose_note:
                         kva = kva_match.group(1).replace(',', '.')
                         prefix = "TRI" if is_trifasico else ("BI" if is_bifasico else ("MONO" if float(kva) <= 37.5 else "TRI"))
                         desc = f"{prefix}-{kva}kVA"
-                        # Regra dura: trafo só entra como novo quando marcado NEW.
-                        if state == 'NEW':
+                        # Em modo revisão: só aceitar trafo NEW; em modo normal: aceitar EXISTING também.
+                        if (not strict_new_only) or state == 'NEW':
                             p_data['Trafo'] = desc
 
         # Preenchimento assistido: quando o poste NEW ficou sem estrutura,
@@ -1125,7 +1181,7 @@ class ProjectExtractor:
             if structs:
                 candidate_lines.append(
                     {
-                        "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2),
+                        "pos": ((w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2 + words_cumulative_y),
                         "structs": structs,
                     }
                 )
@@ -1160,16 +1216,27 @@ class ProjectExtractor:
             is_new_pole    = data.get('IsNew', False)
             is_type_new    = data.get('IsTypeNew', False)
             has_new_content = data.get('IsNewContent', False)
-            is_type_new = data.get('IsTypeNew', False)
             has_type       = data.get('Pole', 'Desconhecido') != 'Desconhecido'
-            has_structures  = bool(data.get('Est'))
-            is_in_diagram   = data.get('IsInDiagram', False)
 
-            include = is_new_pole or is_type_new
+            # has_new_content conta apenas quando o poste tem tipologia conhecida
+            # (evita incluir postes fantasma da legenda que pegaram conteúdo NEW vizinho)
+            include = is_new_pole or is_type_new or (has_new_content and has_type)
+
+            # Poste RETROFIT: existente (não trocado), apenas recebeu estrutura nova.
+            # Marcação: incluído por conteúdo novo, mas tipo NÃO é NEW.
+            # Só a estrutura nova deve constar. O tipo recebe sufixo (E) para que
+            # o engine NÃO fature o poste (regra em resolve_clamps), mas ainda
+            # resolva as ferragens da estrutura nova pela tipologia.
+            is_retrofit = include and not is_new_pole and not is_type_new
+            if is_retrofit:
+                data['Est'] = list(data.get('EstNew', []))
+                _orig_pole = str(data.get('Pole', 'Desconhecido'))
+                if _orig_pole and _orig_pole != 'Desconhecido' and '(E)' not in _orig_pole:
+                    data['Pole'] = f"{_orig_pole}(E)"
 
             # Fallback final: se o poste novo entrou sem estrutura, tenta pela
             # linha NEW mais próxima contendo a mesma tipologia de poste.
-            if include and not data.get('Est'):
+            if include and not is_retrofit and not data.get('Est'):
                 pole_key = str(data.get('Pole', '')).upper().replace('/', 'X')
                 px, py = data.get('pos', (0.0, 0.0))
                 nearest = None
@@ -1191,7 +1258,7 @@ class ProjectExtractor:
             # Complemento conservador: quando o poste novo já tem estruturas,
             # permite adicionar estruturas faltantes da linha técnica mais próxima
             # com a mesma tipologia (inclui linhas EXISTING, exclui REMOVAL).
-            if include and typed_struct_lines:
+            if include and not is_retrofit and typed_struct_lines:
                 pole_key = str(data.get('Pole', '')).upper()
                 px, py = data.get('pos', (0.0, 0.0))
                 nearest = None
@@ -1216,17 +1283,9 @@ class ProjectExtractor:
 
             if include:
                 data['Est'] = self._expand_structure_list(data.get('Est', []))
-                # Marcar tipo como EXISTING se não foi confirmado como NEW
-                if not is_new_pole and not is_type_new and has_type:
-                    pole_raw = data['Pole']
-                    if '(E)' not in pole_raw and '(R)' not in pole_raw:
-                        # Modo permissivo: manter sem sufixo (é novo projeto)
-                        pass
-
-                items_to_del = ['pos', 'id', 'IsNew', 'IsNewContent', 'IsTypeNew', 'IsInDiagram', 'state']
+                items_to_del = ['pos', 'id', 'IsNew', 'IsNewContent', 'IsTypeNew', 'IsInDiagram', 'state', 'EstNew']
                 for k in items_to_del:
                     if k in data: del data[k]
-
                 cleaned_map[p_id] = data
 
         # Fallback de inferência por caixas: quando o modo com P_ID explícito deixa
@@ -1356,6 +1415,144 @@ class ProjectExtractor:
             if fallback_map:
                 cleaned_map = fallback_map
 
+        # ─── SPINE CANÔNICO: completude garantida ────────────────────────────
+        # A lista de P_IDs reais do prescan é a fonte de verdade dos postes.
+        # Qualquer poste real ausente do resultado, mas que tenha CONTEÚDO NEW
+        # próximo da sua âncora no desenho, é reconstruído aqui — evitando que
+        # falhas de associação descartem silenciosamente postes do escopo novo.
+        # Postes apenas-EXISTING permanecem fora (correto em modo revisão).
+        if has_explicit_pids and exact_pole_anchors:
+            # IDs canônicos normalizados (P01→P1); descarta tokens GPS (P0125...)
+            canonical_ids = set()
+            for pid in explicit_p_ids_found:
+                digits = re.sub(r"\D", "", pid)
+                if digits and len(digits) <= 2:
+                    canonical_ids.add(f"P{int(digits)}")
+
+            # Normalizar chaves do resultado para a forma canônica (P01→P1),
+            # mesclando duplicatas para evitar que o spine recrie um poste já presente.
+            _norm_map: dict[str, Any] = {}
+            for k, v in cleaned_map.items():
+                digits = re.sub(r"\D", "", str(k))
+                nk = f"P{int(digits)}" if digits else str(k)
+                if nk in _norm_map:
+                    # mantém a entrada mais rica (mais estruturas / com tipologia)
+                    cur = _norm_map[nk]
+                    cand_score = (len(v.get("Est", []) or []), v.get("Pole", "") != "Desconhecido")
+                    cur_score = (len(cur.get("Est", []) or []), cur.get("Pole", "") != "Desconhecido")
+                    if cand_score > cur_score:
+                        _norm_map[nk] = v
+                else:
+                    _norm_map[nk] = v
+            cleaned_map = _norm_map
+
+            # Melhor âncora de desenho por id: a que tem mais tokens NEW por perto
+            # (a legenda concentra texto GPS sem estado NEW).
+            anchors_by_id: dict[str, tuple[int, tuple[float, float]]] = {}
+            for a in exact_pole_anchors:
+                aid = a["id"]
+                if aid not in canonical_ids:
+                    continue
+                ax, ay = a["pos"]
+                score = sum(
+                    1 for it in labeled_items
+                    if it.get("state") == "NEW"
+                    and (it["pos"][0] - ax) ** 2 + (it["pos"][1] - ay) ** 2 < 90 ** 2
+                )
+                prev = anchors_by_id.get(aid)
+                if prev is None or score > prev[0]:
+                    anchors_by_id[aid] = (score, (ax, ay))
+
+            RADIUS2 = 120 ** 2
+
+            def _owner_of(ix: float, iy: float) -> str | None:
+                # Dono de um token = âncora canônica mais próxima (dentro do raio).
+                # Impede que um poste roube conteúdo NEW de um vizinho em layout denso.
+                best_id = None
+                best_d = RADIUS2
+                for aid, (_s, (ax, ay)) in anchors_by_id.items():
+                    d = (ax - ix) ** 2 + (ay - iy) ** 2
+                    if d < best_d:
+                        best_d = d
+                        best_id = aid
+                return best_id
+
+            for pid in sorted(canonical_ids, key=lambda x: int(re.sub(r"\D", "", x) or 0)):
+                if pid in cleaned_map:
+                    continue
+                anc = anchors_by_id.get(pid)
+                if not anc:
+                    continue
+                px, py = anc[1]
+                # Tipos: preferir o token cujo dono é ESTE poste; senão o mais
+                # próximo no raio (fallback para layouts densos onde o rótulo de
+                # tipo é reconstruído deslocado).
+                owned_new_type = owned_exist_type = None
+                any_new_type = any_exist_type = trafo = None
+                b_ont = b_oet = b_ant = b_aet = b_tr = 1e18
+                new_ests: list[str] = []
+                for it in labeled_items:
+                    ix, iy = it["pos"]
+                    d = (px - ix) ** 2 + (py - iy) ** 2
+                    if d > RADIUS2:
+                        continue
+                    st = it.get("state")
+                    text = it.get("text", "")
+                    owned = _owner_of(ix, iy) == pid
+                    # Tipologia (não depende da classificação 'type' do labeled_item,
+                    # que falha com tokens compostos como 'H5-3/8M11x300,CE4,...')
+                    t = _extract_pole_type(text)
+                    if t:
+                        if st == "NEW":
+                            if d < b_ant:
+                                any_new_type, b_ant = t, d
+                            if owned and d < b_ont:
+                                owned_new_type, b_ont = t, d
+                        elif st != "REMOVAL":
+                            if d < b_aet:
+                                any_exist_type, b_aet = t, d
+                            if owned and d < b_oet:
+                                owned_exist_type, b_oet = t, d
+                    # Transformador NEW (somente do poste dono)
+                    if owned and st == "NEW" and d < b_tr:
+                        km = trafo_regex.search(text)
+                        if km:
+                            kva = km.group(1).replace(",", ".")
+                            try:
+                                prefix = "MONO" if float(kva) <= 37.5 else "TRI"
+                            except ValueError:
+                                prefix = "TRI"
+                            trafo, b_tr = f"{prefix}-{kva}kVA", d
+                    # Estruturas NEW (somente do poste dono) — usa o mesmo parser
+                    # robusto das demais etapas, ignorando o campo 'type'.
+                    if owned and st == "NEW":
+                        for e in _extract_structs_from_line(text):
+                            if e not in new_ests:
+                                new_ests.append(e)
+
+                # Inclusão exige conteúdo NEW PRÓPRIO (do poste dono): tipo novo
+                # OU estrutura nova. Conteúdo só-existing, ou NEW que pertence a
+                # um vizinho mais próximo, não habilita o poste (drop correto).
+                has_owned_new = (owned_new_type is not None) or bool(new_ests)
+                if not has_owned_new:
+                    continue
+
+                est_expanded = self._expand_structure_list(new_ests)
+                if owned_new_type:
+                    # Tipo do próprio poste é NEW → poste novo completo.
+                    cleaned_map[pid] = {"Pole": owned_new_type, "Est": est_expanded, "Trafo": trafo}
+                elif owned_exist_type:
+                    # Tipo do próprio poste é existente → retrofit; (E) não fatura poste.
+                    cleaned_map[pid] = {"Pole": f"{owned_exist_type}(E)", "Est": est_expanded, "Trafo": trafo}
+                elif any_new_type:
+                    # Sem tipo próprio, mas há tipo NEW vizinho (rótulo reconstruído
+                    # deslocado em layout denso) → poste novo com esse tipo.
+                    cleaned_map[pid] = {"Pole": any_new_type, "Est": est_expanded, "Trafo": trafo}
+                elif any_exist_type:
+                    cleaned_map[pid] = {"Pole": f"{any_exist_type}(E)", "Est": est_expanded, "Trafo": trafo}
+                else:
+                    cleaned_map[pid] = {"Pole": "Desconhecido", "Est": est_expanded, "Trafo": trafo}
+
         # Vincular códigos ESTF/ET aos postes com trafo para consumo no engine.
         def _assign_codes_by_text_proximity(prefix: str, codes: list[str], target_ids: list[str]) -> dict[str, list[str]]:
             assigned: dict[str, list[str]] = {}
@@ -1451,7 +1648,9 @@ class ProjectExtractor:
         5. Deduplicação: ignora cabo já capturado com mesma desc + qtd.
         """
         cables_found = []
+        context_cables = []  # cabos EXISTING (não faturados); só para contexto de variante SMTR/SMFL
         seen = set()  # deduplicação (desc_upper, qty)
+        _GAUGE_RE = re.compile(r'\dX\d|\d+\s*MM2|\(\d+\)')
         print("--- DEBUG: INICIANDO FIND_CABLES (V4) ---")
 
         keywords = ["MT", "BT", "CABO", "FIO", "COND", "AL", "COBRE", "MULTIPLEX", "NU", "PROTEGIDO"]
@@ -1502,8 +1701,13 @@ class ProjectExtractor:
                     has_meter   = bool(re.search(r'\d\s*(?:M\b|METROS\b)', line_text))
                     if not (has_keyword and has_meter):
                         continue
-                    if strict_new_only and (not has_new_state or has_removal_state):
+                    # Cabo REMOVIDO nunca entra (nem faturado nem como contexto).
+                    if has_removal_state:
                         continue
+                    # Em modo revisão, cabo que não é NEW não é faturado, mas sua
+                    # bitola ainda serve de CONTEXTO para resolver a variante de
+                    # SMTR/SMFL (montagem nova sobre rede secundária existente).
+                    context_only = strict_new_only and not has_new_state
 
                     # Tentar cada padrão até obter match válido
                     matched = False
@@ -1541,15 +1745,23 @@ class ProjectExtractor:
                             matched = True
                             break
                         seen.add(key)
-                        cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
+                        if context_only:
+                            # Só registra como contexto se tiver bitola reconhecível;
+                            # marca (E) para o engine NÃO faturar (resolve_cables_direct).
+                            if _GAUGE_RE.search(desc_up):
+                                context_cables.append({'Tipo': tipo, 'Desc': f"{desc}(E)", 'Qtd': qty})
+                        else:
+                            cables_found.append({'Tipo': tipo, 'Desc': desc, 'Qtd': qty})
                         matched = True
                         break
 
                     if not matched:
                         print(f"[CABO] Linha ignorada (sem match): {line_text[:80]}")
 
-        print(f"--- DEBUG: FIND_CABLES encontrou {len(cables_found)} cabos ---")
-        return cables_found
+        # NEW primeiro garante precedência na detecção de variante; contexto (E) ao final.
+        result = cables_found + context_cables
+        print(f"--- DEBUG: FIND_CABLES encontrou {len(cables_found)} cabos faturáveis + {len(context_cables)} de contexto ---")
+        return result
 
     def get_summary_structures(self, pole_map):
         """Quantifica total de estruturas para o resumo inicial."""

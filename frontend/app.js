@@ -50,7 +50,6 @@ const els = {
   btnApplyUpdate: document.getElementById("btnApplyUpdate"),
   updateStatus: document.getElementById("updateStatus"),
   pdfFile: document.getElementById("pdfFile"),
-  btnExtract: document.getElementById("btnExtract"),
   extractStatus: document.getElementById("extractStatus"),
   ordem: document.getElementById("ordem"),
   equipe: document.getElementById("equipe"),
@@ -90,10 +89,31 @@ function resolveBaseUrl() {
   return "http://127.0.0.1:8600";
 }
 
+function apiUrl(path) {
+  const cleanPath = String(path || "");
+  if (/^https?:\/\//i.test(cleanPath)) {
+    return cleanPath;
+  }
+  const base = resolveBaseUrl();
+  return `${base}${cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`}`;
+}
+
+function apiFetch(path, options = {}) {
+  return fetch(apiUrl(path), {
+    credentials: "include",
+    ...options,
+  });
+}
+
 function navigateWithVersion(path) {
   const stamp = Date.now();
   const base = resolveBaseUrl();
   window.location.href = `${base}${path}?v=${stamp}`;
+}
+
+function navigateToPath(path) {
+  const base = resolveBaseUrl();
+  window.location.href = `${base}${path}`;
 }
 
 window.addEventListener("error", (event) => {
@@ -190,7 +210,7 @@ function renderDatalist(id, options) {
 
 async function refreshStructureHints() {
   try {
-    const resp = await fetch("/api/structures");
+    const resp = await apiFetch("/api/structures");
     if (!resp.ok) return;
     const data = await resp.json();
     const apiHints = Array.isArray(data?.structures) ? data.structures : [];
@@ -269,11 +289,12 @@ function getExportPayload(extra = {}) {
 
 function syncExportButtons() {
   const gate = buildGateState(state.qualityGate);
-  const disabled = state.bom.length === 0 || gate.blocked;
-  els.btnDownloadCsv.disabled = disabled;
-  els.btnDownloadPdf.disabled = disabled;
+  const hasBom = state.bom.length > 0;
+  const exportDisabled = !hasBom || gate.blocked;
+  els.btnDownloadCsv.disabled = exportDisabled;
+  els.btnDownloadPdf.disabled = exportDisabled;
   if (els.btnSendWhatsapp) {
-    els.btnSendWhatsapp.disabled = disabled;
+    els.btnSendWhatsapp.disabled = !hasBom;
   }
 }
 
@@ -339,18 +360,17 @@ function renderPolesTable() {
       <td><input data-field="id" value="${escapeHtml(p.id)}" /></td>
       <td><select data-field="Pole">${buildSelectOptions(POLE_TYPES, p.Pole, "Selecione")}</select></td>
       <td>
-        <div style="display:flex;gap:6px;align-items:center;">
+        <div class="pole-structure-editor">
           <input data-field="Est" value="${escapeHtml(p.Est.join(", "))}" placeholder="Ex: U3, ET1T" />
           <select data-field="EstPick">${buildSelectOptions(["", ...structureHints], "", "Estrutura")}</select>
           <button type="button" class="btnAddStruct">+</button>
         </div>
       </td>
       <td><select data-field="Trafo">${buildSelectOptions(TRAFO_OPTIONS, p.Trafo || "", "Selecione")}</select></td>
-      <td><input data-field="EtCodes" value="${escapeHtml((p.EtCodes || []).join(", "))}" placeholder="ET123456 ou ESTF123456" /></td>
+      <td><input data-field="EtCodes" value="${escapeHtml((p.EtCodes || []).join(", "))}" placeholder="ET/ESTF" /></td>
       <td><select data-field="Chave">${buildSelectOptions(CHAVE_OPTIONS, p.Chave || "", "Selecione")}</select></td>
-      <td><input data-field="EstaiQtd" type="number" min="0" step="1" value="${p.Estai.Qtd}" /></td>
-      <input type="hidden" data-field="EstfCodes" value="${escapeHtml((p.EstfCodes || []).join(", "))}" />
-      <td><button type="button" class="btnRemove">Remover</button></td>
+      <td><input data-field="EstaiQtd" type="number" min="0" step="1" value="${p.Estai.Qtd}" /><input type="hidden" data-field="EstfCodes" value="${escapeHtml((p.EstfCodes || []).join(", "))}" /></td>
+      <td><button type="button" class="btnRemove" title="Remover"></button></td>
     `;
     tr.querySelector(".btnAddStruct").addEventListener("click", () => {
       const estInput = tr.querySelector('[data-field="Est"]');
@@ -393,7 +413,7 @@ function renderCablesTable() {
       <td><select data-field="Tipo">${buildSelectOptions(CABLE_TYPES, c.Tipo, "Selecione")}</select></td>
       <td><input data-field="Desc" list="cableDescHints" value="${escapeHtml(c.Desc)}" /></td>
       <td><input data-field="Qtd" type="number" min="0" step="0.01" value="${c.Qtd}" /></td>
-      <td><button type="button" class="btnRemove">Remover</button></td>
+      <td><button type="button" class="btnRemove" title="Remover"></button></td>
     `;
     tr.querySelector(".btnRemove").addEventListener("click", () => {
       state.cables.splice(idx, 1);
@@ -457,27 +477,28 @@ function renderBomByPole() {
   renderBomRows(els.bomPoleTableBody, rows);
 }
 
+// O conteúdo de Validação Técnica foi unificado no painel único do Gate de
+// Qualidade (renderQualityGate). Esta função apenas garante que o box antigo
+// permaneça vazio.
 function renderValidation() {
-  if (!state.validation) {
-    els.validationBox.innerHTML = "";
-    return;
-  }
+  if (els.validationBox) els.validationBox.innerHTML = "";
+}
+
+// Extrai os dados de validação técnica (problemas + contagens) para compor o
+// painel único, sem renderizar seção própria (evita duplicar erros/avisos).
+function buildValidationFragment() {
   const v = state.validation;
+  if (!v) return { has: false, issuesHtml: "", errors: 0, warnings: 0 };
   const issues = Array.isArray(v.issues) ? v.issues : [];
   const visibleIssues = issues.filter((issue) => {
     const severity = String(issue.severity || "info").trim().toLowerCase();
     const status = String(issue.status || "").trim().toLowerCase();
     return !["ok", "success", "pass", "passed"].includes(severity) && !["ok", "success", "pass", "passed"].includes(status);
   });
-  const hasDivergence = visibleIssues.length > 0 || toInt(v.errors, 0) > 0 || toInt(v.warnings, 0) > 0;
-  if (!hasDivergence) {
-    els.validationBox.innerHTML = "";
-    return;
-  }
-  const metrics = [];
-  if (toInt(v.errors, 0) > 0) metrics.push(`<span class="metric-chip err">Erros: ${v.errors || 0}</span>`);
-  if (toInt(v.warnings, 0) > 0) metrics.push(`<span class="metric-chip warn">Avisos: ${v.warnings || 0}</span>`);
-  const issueItems = visibleIssues
+  const errors = toInt(v.errors, 0);
+  const warnings = toInt(v.warnings, 0);
+  const has = visibleIssues.length > 0 || errors > 0 || warnings > 0;
+  const issuesHtml = visibleIssues
     .map((issue) => {
       const severity = String(issue.severity || "info").toUpperCase();
       const message = escapeHtml(issue.message || "");
@@ -485,13 +506,7 @@ function renderValidation() {
       return `<li><strong>[${severity}]</strong> ${message}${source ? ` <span>(${source})</span>` : ""}</li>`;
     })
     .join("");
-  els.validationBox.innerHTML = `
-    <div class="panel">
-      <div class="panel-title">Validacao Tecnica</div>
-      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
-      ${issueItems ? `<ul class="issue-list">${issueItems}</ul>` : "<div>Nenhuma inconsistencia tecnica reportada.</div>"}
-    </div>
-  `;
+  return { has, issuesHtml, errors, warnings };
 }
 
 function renderRecommendations() {
@@ -595,18 +610,15 @@ function renderStructureAudit() {
 
 function renderQualityGate() {
   const gate = buildGateState(state.qualityGate);
-  if (!state.qualityGate && state.bom.length === 0) {
-    els.qualityGateBox.innerHTML = "";
-    syncExportButtons();
-    return;
-  }
-  const hasDivergence =
+  const valFrag = buildValidationFragment();
+  const gateHasDivergence =
     gate.blocked ||
     gate.errors > 0 ||
     gate.warnings > 0 ||
     gate.verificar_count > 0 ||
     gate.low_confidence_count > 0;
-  if (!hasDivergence) {
+  // Painel único: aparece se houver divergência de validação OU de gate.
+  if (!valFrag.has && !gateHasDivergence) {
     els.qualityGateBox.innerHTML = "";
     syncExportButtons();
     return;
@@ -623,9 +635,13 @@ function renderQualityGate() {
     )
     .join("");
 
+  // Métricas unificadas: erros/avisos do gate e da validação são a mesma coisa
+  // (o gate deriva da validação) → mostrar uma vez só.
+  const errors = Math.max(gate.errors, valFrag.errors);
+  const warnings = Math.max(gate.warnings, valFrag.warnings);
   const metrics = [];
-  if (gate.errors > 0) metrics.push(`<span class="metric-chip err">Erros: ${gate.errors}</span>`);
-  if (gate.warnings > 0) metrics.push(`<span class="metric-chip warn">Avisos: ${gate.warnings}</span>`);
+  if (errors > 0) metrics.push(`<span class="metric-chip err">Erros: ${errors}</span>`);
+  if (warnings > 0) metrics.push(`<span class="metric-chip warn">Avisos: ${warnings}</span>`);
   if (gate.verificar_count > 0) metrics.push(`<span class="metric-chip warn">VERIFICAR: ${gate.verificar_count}</span>`);
   if (gate.low_confidence_count > 0) metrics.push(`<span class="metric-chip warn">Baixa confiança: ${gate.low_confidence_count}</span>`);
 
@@ -645,16 +661,8 @@ function renderQualityGate() {
     alertHtml = "";
   }
 
-  els.qualityGateBox.innerHTML = `
-    <div class="panel">
-      <div class="panel-title">Gate de Qualidade</div>
-      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
-      ${lowConfList
-      ? `<div class="panel-title">Itens para revisão manual</div><ul class="low-conf-list">${lowConfList}</ul>`
-      : ""
-    }
-      <div class="gate-controls">
-        ${gate.low_confidence_count > 0
+  const controlsHtml = `
+      ${gate.low_confidence_count > 0
       ? `
           <div class="gate-check">
             <input id="lowConfReviewConfirmed" type="checkbox" ${gate.low_conf_review_confirmed ? "checked" : ""} />
@@ -663,11 +671,11 @@ function renderQualityGate() {
         `
       : ""
     }
-        ${gate.errors > 0
+      ${gate.errors > 0
       ? `
           <div class="gate-check">
             <input id="overrideEnabled" type="checkbox" ${gate.override_enabled ? "checked" : ""} />
-            <label for="overrideEnabled">Forçar exportação mesmo com erro crítico, com justificativa auditável.</label>
+            <label for="overrideEnabled">Forçar exportação mesmo com erro crítico.</label>
           </div>
           ${gate.override_enabled
         ? `<label>Justificativa obrigatória
@@ -679,8 +687,19 @@ function renderQualityGate() {
       }
         `
       : ""
+    }`;
+  const hasControls = gate.low_confidence_count > 0 || gate.errors > 0;
+
+  els.qualityGateBox.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">Validação e Qualidade</div>
+      ${metrics.length ? `<div class="metrics-row">${metrics.join("")}</div>` : ""}
+      ${valFrag.issuesHtml ? `<ul class="issue-list">${valFrag.issuesHtml}</ul>` : ""}
+      ${lowConfList
+      ? `<div class="panel-subtitle">Itens para revisão manual</div><ul class="low-conf-list">${lowConfList}</ul>`
+      : ""
     }
-      </div>
+      ${hasControls ? `<div class="gate-controls">${controlsHtml}</div>` : ""}
       ${alertHtml}
     </div>
   `;
@@ -707,8 +726,11 @@ function renderQualityGate() {
   const overrideReasonEl = document.getElementById("overrideReason");
   if (overrideReasonEl) {
     overrideReasonEl.addEventListener("input", (event) => {
+      // NÃO re-renderizar o painel aqui: isso reconstruiria a textarea e faria
+      // perder o foco a cada tecla. Apenas atualiza o estado e revalida os
+      // botões de exportação (libera quando a justificativa atinge 10 chars).
       state.gateUi.overrideReason = event.target.value;
-      renderQualityGate();
+      syncExportButtons();
     });
   }
 
@@ -721,7 +743,7 @@ async function downloadFromEndpoint(path, payload, filenameFallback) {
 }
 
 async function fetchExportBlob(path, payload, filenameFallback) {
-  const resp = await fetch(path, {
+  const resp = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -782,25 +804,133 @@ function buildWhatsappMessage() {
   return `Segue lista de material em PDF.\nDiagrama: ${diagram}\nEquipe: ${equipe}`;
 }
 
-async function sendPdfViaWhatsapp() {
-  const message = buildWhatsappMessage();
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-  const { blob, filename } = await fetchExportBlob("/api/export/pdf", getPdfPayload(), "lista_materiais.pdf");
-  const pdfFile = new File([blob], filename, { type: "application/pdf" });
+// ── WhatsApp Send Flow ──────────────────────────────────────────────
 
-  if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-    await navigator.share({
-      title: filename,
-      text: message,
-      files: [pdfFile],
+const WA_RECENT_KEY = "wa_recent_contacts";
+const WA_RECENT_MAX = 5;
+
+function waGetRecent() {
+  try { return JSON.parse(localStorage.getItem(WA_RECENT_KEY) || "[]"); }
+  catch { return []; }
+}
+
+function waSaveRecent(phone) {
+  const list = waGetRecent().filter(p => p !== phone);
+  list.unshift(phone);
+  localStorage.setItem(WA_RECENT_KEY, JSON.stringify(list.slice(0, WA_RECENT_MAX)));
+}
+
+function phoneToWaDigits(input) {
+  const digits = input.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("55") && digits.length >= 12) return digits;
+  if (digits.length >= 10) return "55" + digits;
+  return digits;
+}
+
+function waRenderRecent() {
+  const recentBox = document.getElementById("waRecentBox");
+  const recentList = document.getElementById("waRecentList");
+  if (!recentBox || !recentList) return;
+  const contacts = waGetRecent();
+  if (contacts.length === 0) { recentBox.hidden = true; return; }
+  recentBox.hidden = false;
+  recentList.innerHTML = "";
+  for (const phone of contacts) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "waRecentBtn";
+    btn.textContent = phone;
+    btn.addEventListener("click", () => {
+      const input = document.getElementById("waPhone");
+      if (input) input.value = phone;
     });
-    return "WhatsApp acionado com PDF e mensagem.";
+    recentList.appendChild(btn);
+  }
+}
+
+function openWhatsappModal() {
+  const modal = document.getElementById("whatsappModal");
+  const msgArea = document.getElementById("waMessage");
+  const phoneInput = document.getElementById("waPhone");
+  if (!modal) return;
+  if (msgArea) msgArea.value = buildWhatsappMessage();
+  if (phoneInput) phoneInput.value = "";
+  waRenderRecent();
+  modal.hidden = false;
+  if (phoneInput) phoneInput.focus();
+}
+
+function closeWhatsappModal() {
+  const modal = document.getElementById("whatsappModal");
+  if (modal) modal.hidden = true;
+}
+
+function showWaBanner() {
+  const banner = document.getElementById("waBanner");
+  if (!banner) return;
+  banner.hidden = false;
+  document.getElementById("btnCloseWaBanner")?.addEventListener("click", () => {
+    banner.hidden = true;
+  }, { once: true });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) banner.hidden = true;
+  }, { once: true });
+}
+
+async function prepareWhatsappSend() {
+  const phoneRaw = String(document.getElementById("waPhone")?.value || "").trim();
+  const message = String(document.getElementById("waMessage")?.value || buildWhatsappMessage()).trim();
+  const btn = document.getElementById("btnPrepareWa");
+
+  const waDigits = phoneToWaDigits(phoneRaw);
+  // web.whatsapp.com/send compartilha a sessão já aberta no browser (mesmos cookies/localStorage).
+  // wa.me redireciona e pode criar sessão isolada ou abrir o app desktop, exigindo QR.
+  // Janela nomeada "wapp_calc": reutilizada a cada envio — sem novo QR após o primeiro login.
+  const waUrl = waDigits
+    ? `https://web.whatsapp.com/send?phone=${waDigits}&text=${encodeURIComponent(message)}`
+    : `https://web.whatsapp.com/`;
+
+  // Abre ANTES do await — preserva o contexto de gesto do usuário.
+  // Após qualquer await, o browser classifica a abertura como popup não solicitado e bloqueia.
+  const waWindow = window.open(waUrl, "wapp_calc");
+  if (!waWindow) {
+    throw new Error("O navegador bloqueou a abertura do WhatsApp. Permita popups para este site nas configuracoes do navegador.");
   }
 
-  triggerBlobDownload(blob, filename);
-  window.open(whatsappUrl, "_blank", "noopener");
-  return "WhatsApp aberto com a mensagem pronta. O PDF foi baixado para anexo manual.";
+  if (btn) { btn.disabled = true; btn.textContent = "Gerando PDF..."; }
+
+  try {
+    const { blob, filename } = await fetchExportBlob("/api/export/pdf", getPdfPayload(), "lista_materiais.pdf");
+    triggerBlobDownload(blob, filename);
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "Preparar Envio"; }
+    throw new Error("Falha ao gerar o PDF: " + err.message);
+  }
+
+  if (waDigits) waSaveRecent(phoneRaw);
+
+  if (btn) { btn.disabled = false; btn.textContent = "Preparar Envio"; }
+  closeWhatsappModal();
+  showWaBanner();
+  setStatus(els.calcStatus, "PDF baixado e WhatsApp aberto.");
 }
+
+// Modal event bindings
+document.getElementById("btnCloseWaModal")?.addEventListener("click", closeWhatsappModal);
+document.getElementById("btnCancelWa")?.addEventListener("click", closeWhatsappModal);
+document.getElementById("waModBackdrop")?.addEventListener("click", closeWhatsappModal);
+document.getElementById("btnPrepareWa")?.addEventListener("click", async () => {
+  try {
+    await prepareWhatsappSend();
+  } catch (err) {
+    setStatus(els.calcStatus, err.message, false);
+    closeWhatsappModal();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeWhatsappModal();
+});
 
 async function parseApiError(resp, fallbackMessage) {
   let message = fallbackMessage;
@@ -814,7 +944,7 @@ async function parseApiError(resp, fallbackMessage) {
     }
   }
   if (resp.status === 401) {
-    window.location.href = "/login";
+    navigateToPath("/login");
   }
   if (resp.status === 404 && String(resp.url || "").includes("/api/")) {
     message = "API indisponível na publicação atual. Verifique o deploy das rotas /api no Vercel.";
@@ -844,7 +974,7 @@ async function ensureAuthenticatedSession() {
       throw error;
     }
     if (session?.access_token) {
-      const syncResp = await fetch("/auth/session", {
+      const syncResp = await apiFetch("/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: session.access_token }),
@@ -857,7 +987,7 @@ async function ensureAuthenticatedSession() {
     // segue para redirecionamento
   }
 
-  window.location.href = "/login";
+  navigateToPath("/login");
   return false;
 }
 
@@ -868,7 +998,7 @@ async function logoutAndRedirect() {
   } catch (_err) {
     // Mesmo com falha no signOut, redireciona para login.
   }
-  window.location.href = "/login";
+  navigateToPath("/login");
 }
 
 async function checkForUpdates() {
@@ -876,7 +1006,7 @@ async function checkForUpdates() {
     els.btnCheckUpdate.disabled = true;
     els.btnApplyUpdate.disabled = true;
     setStatus(els.updateStatus, "Consultando atualizacoes...");
-    const resp = await fetch("/api/update/check");
+    const resp = await apiFetch("/api/update/check");
     if (!resp.ok) {
       const errorMessage = await parseApiError(resp, `Falha ao buscar atualizacao (${resp.status})`);
       throw new Error(errorMessage);
@@ -907,7 +1037,7 @@ async function applyUpdate() {
     els.btnCheckUpdate.disabled = true;
     els.btnApplyUpdate.disabled = true;
     setStatus(els.updateStatus, "Aplicando atualizacao. A aplicacao sera reiniciada ao final...");
-    const resp = await fetch("/api/update/apply", {
+    const resp = await apiFetch("/api/update/apply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -933,7 +1063,7 @@ async function loadVersionInfo() {
     return;
   }
   try {
-    const resp = await fetch("/api/version");
+    const resp = await apiFetch("/api/version");
     if (!resp.ok) {
       els.appVersionInfo.textContent = "Versao indisponivel no momento";
       return;
@@ -975,7 +1105,7 @@ async function runCalculate() {
       els.bomPoleTableBody.innerHTML = "";
     }
 
-    const resp = await fetch("/api/calculate", {
+    const resp = await apiFetch("/api/calculate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ poles: state.poles, cables: state.cables }),
@@ -1004,63 +1134,69 @@ async function runCalculate() {
   }
 }
 
-if (els.btnExtract && els.pdfFile && APP_MODE === "programacao") {
-  els.btnExtract.addEventListener("click", async () => {
-    try {
-      const file = els.pdfFile.files[0];
-      if (!file) throw new Error("Selecione um PDF.");
-
-      setStatus(els.extractStatus, "Extraindo PDF...");
-      els.validationBox.innerHTML = "";
-      els.structureAuditBox.innerHTML = "";
-      els.qualityGateBox.innerHTML = "";
-      els.recommendationsBox.innerHTML = "";
-      const form = new FormData();
-      form.append("file", file);
-
-      let resp = await fetch("/api/extract", { method: "POST", body: form });
-      if (!resp.ok && resp.status >= 500) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
-        resp = await fetch("/api/extract", { method: "POST", body: form });
-      }
-      if (!resp.ok) {
-        const errorMessage = await parseApiError(resp, `Falha na extracao (${resp.status})`);
-        throw new Error(errorMessage);
-      }
-      const data = await resp.json();
-
-      state.poles = (data.poles || []).map((p, idx) => ensurePoleDefaults(p, idx));
-      state.cables = (data.cables || []).map((c) => ensureCableDefaults(c));
-      state.validation = null;
-      state.recommendations = [];
-      state.bom = [];
-      state.bomByPole = {};
-      state.structureAudit = null;
-      state.selectedBomPole = "";
-      state.qualityGate = null;
-      resetGateUi();
-
-      els.ordem.value = data.project_info?.Ordem || "";
-
-      renderPolesTable();
-      renderCablesTable();
-      renderBom();
-      renderBomByPoleSelector();
-      renderBomByPole();
-      renderValidation();
-      renderStructureAudit();
-      renderQualityGate();
-      renderRecommendations();
-      setStatus(
-        els.extractStatus,
-        `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos. Calculando BOM...`
-      );
-
-      await runCalculate();
-      setStatus(els.extractStatus, `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos.`);
-    } catch (err) {
-      setStatus(els.extractStatus, err.message, false);
+async function extractSelectedPdf() {
+  try {
+    const file = els.pdfFile?.files?.[0];
+    if (!file) {
+      return;
     }
+
+    setStatus(els.extractStatus, "Extraindo PDF...");
+    els.validationBox.innerHTML = "";
+    els.structureAuditBox.innerHTML = "";
+    els.qualityGateBox.innerHTML = "";
+    els.recommendationsBox.innerHTML = "";
+    const form = new FormData();
+    form.append("file", file);
+
+    let resp = await apiFetch("/api/extract", { method: "POST", body: form });
+    if (!resp.ok && resp.status >= 500) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      resp = await apiFetch("/api/extract", { method: "POST", body: form });
+    }
+    if (!resp.ok) {
+      const errorMessage = await parseApiError(resp, `Falha na extracao (${resp.status})`);
+      throw new Error(errorMessage);
+    }
+    const data = await resp.json();
+
+    state.poles = (data.poles || []).map((p, idx) => ensurePoleDefaults(p, idx));
+    state.cables = (data.cables || []).map((c) => ensureCableDefaults(c));
+    state.validation = null;
+    state.recommendations = [];
+    state.bom = [];
+    state.bomByPole = {};
+    state.structureAudit = null;
+    state.selectedBomPole = "";
+    state.qualityGate = null;
+    resetGateUi();
+
+    els.ordem.value = data.project_info?.Ordem || "";
+
+    renderPolesTable();
+    renderCablesTable();
+    renderBom();
+    renderBomByPoleSelector();
+    renderBomByPole();
+    renderValidation();
+    renderStructureAudit();
+    renderQualityGate();
+    renderRecommendations();
+    setStatus(
+      els.extractStatus,
+      `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos. Calculando BOM...`
+    );
+
+    await runCalculate();
+    setStatus(els.extractStatus, `Extracao concluida: ${state.poles.length} postes, ${state.cables.length} cabos.`);
+  } catch (err) {
+    setStatus(els.extractStatus, err.message, false);
+  }
+}
+
+if (els.pdfFile && APP_MODE === "programacao") {
+  els.pdfFile.addEventListener("change", () => {
+    void extractSelectedPdf();
   });
 }
 
@@ -1098,14 +1234,7 @@ if (els.btnDownloadPdf) {
 }
 
 if (els.btnSendWhatsapp) {
-  els.btnSendWhatsapp.addEventListener("click", async () => {
-    try {
-      const statusText = await sendPdfViaWhatsapp();
-      setStatus(els.calcStatus, statusText);
-    } catch (err) {
-      setStatus(els.calcStatus, err.message, false);
-    }
-  });
+  els.btnSendWhatsapp.addEventListener("click", () => openWhatsappModal());
 }
 
 if (els.btnCheckUpdate) {
@@ -1139,6 +1268,7 @@ async function bootstrapApp() {
   refreshStructureHints();
   renderPolesTable();
   renderCablesTable();
+  renderBom();
   renderBomByPoleSelector();
   renderBomByPole();
   renderQualityGate();
@@ -1146,3 +1276,18 @@ async function bootstrapApp() {
 }
 
 bootstrapApp();
+
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) {
+    state.bom = [];
+    state.bomByPole = {};
+    state.qualityGate = null;
+    state.validation = null;
+    state.structureAudit = null;
+    state.recommendations = [];
+    renderBom();
+    renderBomByPoleSelector();
+    renderBomByPole();
+    renderQualityGate();
+  }
+});

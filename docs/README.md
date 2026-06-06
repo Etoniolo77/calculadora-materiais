@@ -1,73 +1,66 @@
-# ⚡ Calculadora de Materiais - Eletromarquez
+# ⚡ Calculadora de Materiais — Eletromarquez
 
-Este projeto é uma ferramenta web para auxiliar engenheiros e programadores na extração, cálculo e geração de Listas de Materiais (BOM - Bill of Materials) a partir de projetos de redes elétricas em PDF.
+Ferramenta web para extração, cálculo e geração de Listas de Materiais (BOM — Bill of Materials)
+a partir de projetos de redes elétricas em PDF.
 
-## Stack Oficial
+## Stack oficial
 
-- **Backend oficial**: `FastAPI`
-- **Frontend oficial**: `HTML/CSS/JS` estático em `frontend/`
+- **Backend**: FastAPI (`backend/app_fastapi.py` em dev; `api/index.py` na Vercel)
+- **Frontend**: HTML/CSS/JS estático em `frontend/`
 - **Motor de negócio**: módulos em `core/`
+- **Banco (runtime)**: **Supabase (PostgreSQL)** — códigos SAP e estruturas
+- **Hospedagem (produção)**: **Vercel** (serverless) + Supabase
 
 ## 🚀 Funcionalidades
 
-- **Extração Automática**: Processamento de arquivos PDF para detectar automaticamente postes, estruturas, cabos e suas respectivas quantidades.
-- **Cálculo Inteligente**: Motor de cálculo que "explode" estruturas técnicas em componentes individuais (parafusos, braçadeiras, cruzetas, etc.) baseados no tipo de poste e normas técnicas.
-- **Edição Flexível**: Interface interativa para adicionar, remover ou modificar postes e equipamentos manualmente.
-- **Geração de Relatório**: Exportação da lista consolidada de materiais em formato PDF profissional.
-- **Busca de Materiais**: Integração com banco de dados SQLite para traduzir descrições técnicas em códigos SAP atualizados.
+- **Extração automática**: detecta postes, estruturas, cabos, transformadores e quantidades no PDF.
+- **Cálculo inteligente**: "explode" estruturas técnicas em componentes (parafusos, braçadeiras, cruzetas…) por tipo de poste e norma.
+- **Edição assistida**: interface para revisar/ajustar postes e equipamentos antes do cálculo.
+- **Relatório PDF**: exportação da BOM consolidada (layout econômico para impressão).
+- **De-para SAP**: tradução de descrições técnicas em códigos SAP via Supabase.
 
-## 🛠️ Tecnologias Utilizadas
+## 🛠️ Tecnologias
 
-- **Interface oficial**: HTML/CSS/JS servido pelo FastAPI
-- **Processamento de Dados**: Pandas
-- **Extração de PDF**: pdfplumber
-- **Geração de PDF**: ReportLab
-- **Banco de Dados**: SQLite 3
+- Processamento de dados: Pandas
+- Extração de PDF: pdfplumber
+- Geração de PDF: ReportLab
+- Banco: Supabase (PostgreSQL); `data/unified_db.json` como base consolidada de composições
 
-## 📂 Estrutura do Projeto
+## 📂 Estrutura
 
-Principais pastas e arquivos:
+- `api/index.py` — entrypoint da Vercel (serverless).
+- `backend/app_fastapi.py` — API e entrega do frontend (dev local).
+- `frontend/` — interface (HTML/CSS/JS).
+- `core/engine.py` — motor de cálculo de materiais.
+- `core/extractor.py` — leitura e interpretação dos PDFs.
+- `core/database_sqlite.py` — acesso ao banco (proxy Supabase).
+- `data/unified_db.json` — composições de estruturas/kits.
+- `data/vocabulary.json` — vocabulário técnico.
+- `docs/Regras de Extração.md` — regras canônicas do extrator/engine.
 
-- `backend/app_fastapi.py`: API oficial e entrega do frontend.
-- `frontend/`: interface oficial para operação.
-- `core/engine.py`: motor de cálculo de materiais.
-- `core/extractor.py`: leitura e interpretação dos PDFs.
-- `core/database_sqlite.py`: acesso ao banco oficial.
-- `data/materials.db`: banco SQLite oficial.
-- `backend_runtime/`: backend compilado para distribuição interna sem fontes Python principais.
-- `data/unified_db.json`: base consolidada oficial.
-- `data/vocabulary.json`: vocabulário técnico oficial.
-- `storage/manual_corrections.json`: aprendizado operacional e correções manuais.
+## ⚙️ Executar localmente
 
-## ⚙️ Como Executar
+```powershell
+pip install -r requirements.txt
+python backend/run_server.py        # ou: uvicorn backend.app_fastapi:app --port 8600 --reload
+# Acesse http://127.0.0.1:8600/
+```
 
-1. **Instale as dependências**:
-   ```bash
-   pip install -r core/requirements.txt
-   ```
+Fluxo de uso: upload do PDF → revisar dados extraídos → ajustar postes/equipamentos → exportar CSV/PDF após validar a BOM.
 
-2. **Inicie a aplicação oficial**:
-   ```bash
-   powershell -ExecutionPolicy Bypass -File .\scripts\start_internal_fastapi.ps1
-   ```
+## ☁️ Produção (Vercel + Supabase)
 
-3. **Acesse**:
-   - `http://127.0.0.1:8600/`
+- Deploy: `vercel --prod` (projeto já linkado em `.vercel/`).
+- Roteamento em `vercel.json` (`/api/*` → `api/index.py`; `/` → `frontend/index.html`).
+- O banco de produção é o Supabase; alterações de **código** (extrator/engine/frontend) não exigem
+  mudança no Supabase. Atualização de **dados** (materiais/estruturas) usa os scripts em
+  `scripts/utils_and_deploy/` (`migrate_to_supabase.py`, `update_*_from_excel.py`).
 
-4. **Utilização**:
-   - Faça o upload do arquivo PDF do projeto.
-   - Revise os dados extraídos.
-   - Ajuste os tipos de postes e equipamentos.
-   - Exporte CSV ou PDF após validar a BOM.
+## 🧹 Manutenção de dados
 
-## 🧹 Limpeza e Manutenção
-
-Para manter a integridade do banco de dados ou migrar novos dados de planilhas Excel para o SQLite, utilize os scripts em `scripts/` sempre apontando para a pasta oficial `data/`.
-
-## 🏢 Publicação Interna (Office 365 / Teams)
-
-Guia operacional completo:
-- [PUBLICACAO_INTERNA_OFFICE365.md](C:\Users\EvandroCesarToniolo\Projetos_Antigravity\02_PROJETOS\PRJ-13-Calculadora\docs\PUBLICACAO_INTERNA_OFFICE365.md)
+Scripts em `scripts/utils_and_deploy/` para sincronizar materiais/estruturas do Excel para o Supabase.
+Regressão do extrator: `scripts/extractor_snapshot.py` (snapshot per-poste) e
+`scripts/validate_pdf_regression_batch.py` (extrator + engine + BOM sobre os PDFs de teste).
 
 ---
-*Desenvolvido para otimização de fluxos de engenharia elétrica.*
+*Desenvolvido para otimização de fluxos de engenharia elétrica · Eletromarquez.*

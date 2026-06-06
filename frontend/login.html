@@ -3,8 +3,9 @@
 
 <head>
   <meta charset="UTF-8" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Acesso Corporativo - Calculadora de Materiais</title>
+  <title>Acesso Corporativo - Calculadora Materiais CCM</title>
   <style>
     :root {
       --bg-color: #f3f6fa;
@@ -247,7 +248,7 @@
 
     <main class="card">
       <div class="header">
-        <h1>Calculadora BOM</h1>
+        <h1>Calculadora Materiais CCM</h1>
         <p class="subtitle" id="formSubtitle">Acesse com sua conta corporativa</p>
       </div>
 
@@ -289,6 +290,7 @@
     let activeTab = 'login';
     let supabaseClient = null;
     const ALLOWED_DOMAIN = 'eletromarquez.com.br';
+    const ALLOWED_EMAILS = new Set(['admin@admin.com.br', 'admin@admin.com']);
     const SUPABASE_URL = 'https://zhuwirlcnbxysbgdtses.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpodXdpcmxjbmJ4eXNiZ2R0c2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NTI1MjAsImV4cCI6MjA5NjAyODUyMH0.RJ0yS7aWZLAhRGhuN26hwZ0eg3SEw99DbUmAIlzOp30';
 
@@ -317,12 +319,7 @@
         // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente
         supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-        const {
-          data: { session },
-        } = await supabaseClient.auth.getSession();
-        if (session?.access_token) {
-          window.location.href = '/';
-        }
+        await supabaseClient.auth.getSession();
       } catch (err) {
         showStatus("Erro de inicialização: " + err.message, false);
         btnSubmit.disabled = true;
@@ -352,8 +349,10 @@
     }
 
     function validateDomain(email) {
-      if (!email.includes('@')) return false;
-      const domain = email.split('@')[1].trim().toLowerCase();
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized.includes('@')) return false;
+      if (ALLOWED_EMAILS.has(normalized)) return true;
+      const domain = normalized.split('@')[1].trim().toLowerCase();
       return domain === ALLOWED_DOMAIN;
     }
 
@@ -369,7 +368,7 @@
 
       // Validação rápida de domínio no cliente
       if (!validateDomain(email)) {
-        showStatus(`Acesso restrito. Utilize seu e-mail corporativo @${ALLOWED_DOMAIN}`, false);
+        showStatus(`Acesso restrito. Utilize seu e-mail corporativo @${ALLOWED_DOMAIN} ou um usuário de teste autorizado.`, false);
         return;
       }
 

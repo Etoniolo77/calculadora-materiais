@@ -118,6 +118,9 @@ class SupabaseDatabaseLoader:
         self.is_loaded = False
         self._sap_proxy = None
         self.unified_db = None
+        self._sap_desc_cache: dict[str, str] = {}
+        self._find_material_cache: dict[tuple, list[tuple[str, str, float]]] = {}
+        self._explode_structure_cache: dict[tuple[str, str], list[dict]] = {}
 
     def get_conn(self) -> Optional[psycopg2.connection]:
         """Garante e retorna uma conexão ativa e saudável com o Postgres."""
@@ -179,9 +182,15 @@ class SupabaseDatabaseLoader:
 
     def get_sap_description(self, code: str) -> str:
         """Retorna descrição do código SAP."""
+        cache_key = str(code or "").strip()
+        if cache_key in self._sap_desc_cache:
+            return self._sap_desc_cache[cache_key]
+
         conn = self.get_conn()
         if not conn:
-            return f"SAP {code}"
+            value = f"SAP {code}"
+            self._sap_desc_cache[cache_key] = value
+            return value
 
         try:
             with conn.cursor() as cursor:
@@ -190,10 +199,14 @@ class SupabaseDatabaseLoader:
                     (str(code),),
                 )
                 result = cursor.fetchone()
-                return result[0] if result else f"SAP {code}"
+                value = result[0] if result else f"SAP {code}"
+                self._sap_desc_cache[cache_key] = value
+                return value
         except Exception as e:
             print(f"[Supabase] Erro em get_sap_description: {e}")
-            return f"SAP {code}"
+            value = f"SAP {code}"
+            self._sap_desc_cache[cache_key] = value
+            return value
 
     def find_material_by_description(
         self, search_terms, limit: int = 5, exclude_terms: List[str] = None
@@ -210,13 +223,17 @@ class SupabaseDatabaseLoader:
         if isinstance(search_terms, str):
             search_terms = [search_terms]
 
-        exclude_upper = [t.upper() for t in exclude_terms] if exclude_terms else []
+        normalized_terms = tuple(str(term).strip().upper() for term in search_terms if str(term).strip())
+        exclude_upper = tuple(t.upper() for t in exclude_terms) if exclude_terms else tuple()
+        cache_key = (normalized_terms, int(limit), exclude_upper)
+        if cache_key in self._find_material_cache:
+            return list(self._find_material_cache[cache_key])
 
         # Construir cláusulas WHERE baseadas em ILIKE para filtrar os termos obrigatórios
         query_parts = []
         params = []
 
-        for term in search_terms:
+        for term in normalized_terms:
             query_parts.append("descricao ILIKE %s")
             params.append(f"%{term}%")
 
@@ -251,7 +268,9 @@ class SupabaseDatabaseLoader:
                 cursor.execute(query, query_params)
                 rows = cursor.fetchall()
                 if rows:
-                    return [(r[0], r[1], float(r[2] or 0)) for r in rows]
+                    result = [(r[0], r[1], float(r[2] or 0)) for r in rows]
+                    self._find_material_cache[cache_key] = result
+                    return list(result)
         except Exception as e:
             print(f"[Supabase] Erro na busca estrita com pg_trgm: {e}")
             return []
@@ -305,7 +324,9 @@ class SupabaseDatabaseLoader:
                     filtered_rows.append(r)
             rows = filtered_rows
 
-        return [(r[0], r[1], float(r[2] or 0)) for r in rows[:limit]]
+        result = [(r[0], r[1], float(r[2] or 0)) for r in rows[:limit]]
+        self._find_material_cache[cache_key] = result
+        return list(result)
 
     def explode_structure(
         self, structure_code: str, nivel: int = 1, pole_type_str: str = ""
@@ -324,6 +345,9 @@ class SupabaseDatabaseLoader:
             ]
 
         structure_code = str(structure_code).strip().upper()
+        cache_key = (structure_code, str(pole_type_str or "").strip().upper())
+        if cache_key in self._explode_structure_cache:
+            return list(self._explode_structure_cache[cache_key])
 
         is_dt = False
         if pole_type_str:
@@ -363,13 +387,15 @@ class SupabaseDatabaseLoader:
                     print(
                         f"[AVISO] Estrutura {structure_code} não encontrada no Supabase"
                     )
-                    return [
+                    result = [
                         {
                             "code": "VERIFICAR",
                             "desc": f"VERIFICAR ESTRUTURA {structure_code}",
                             "qty": 1,
                         }
                     ]
+                    self._explode_structure_cache[cache_key] = result
+                    return list(result)
 
                 materials = []
                 seen_materials = set()
@@ -408,25 +434,30 @@ class SupabaseDatabaseLoader:
                     print(
                         f"[AVISO] Estrutura {structure_code} sem composição no Supabase"
                     )
-                    return [
+                    result = [
                         {
                             "code": "VERIFICAR",
                             "desc": f"VERIFICAR ESTRUTURA {structure_code}",
                             "qty": 1,
                         }
                     ]
+                    self._explode_structure_cache[cache_key] = result
+                    return list(result)
 
-                return materials
+                self._explode_structure_cache[cache_key] = materials
+                return list(materials)
 
         except Exception as e:
             print(f"[Supabase] Erro ao explodir estrutura {structure_code}: {e}")
-            return [
+            result = [
                 {
                     "code": "VERIFICAR",
                     "desc": f"Erro de banco - {structure_code}",
                     "qty": 1,
                 }
             ]
+            self._explode_structure_cache[cache_key] = result
+            return list(result)
 
     def get_structure_supported_pole_types(self, structure_code: str) -> set[str]:
         """Retorna os tipos de poste suportados por uma estrutura no catálogo."""
@@ -549,4 +580,3 @@ class SupabaseDatabaseLoader:
 # Mantém apelidos idênticos ao SQLiteDatabaseLoader para compatibilidade de imports externos
 SQLiteDatabaseLoader = SupabaseDatabaseLoader
 DatabaseLoader = SupabaseDatabaseLoader
-

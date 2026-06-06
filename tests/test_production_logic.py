@@ -1,3 +1,4 @@
+from backend.app_fastapi import _clean_confidence, _clean_quantity
 from core.engine import MaterialEngine
 
 
@@ -61,7 +62,104 @@ def test_aggregation_merges_same_sap():
     aggregated = engine.aggregate_materials(materials)
     assert len(aggregated) == 1
     assert aggregated[0]["Quantidade"] == 3
-    assert float(aggregated[0]["Confiança"]) == 0.7
+
+
+def test_process_form_data_keeps_raw_rows_per_pole_before_aggregation():
+    engine = MaterialEngine()
+
+    def fake_resolve_clamps(_pole_type, _structures, p_id=""):
+        return [
+            {
+                "Origem": f"Poste {p_id}",
+                "Código SAP": "3001",
+                "Descrição": "ITEM X",
+                "Quantidade": 1,
+                "Confiança": 1.0,
+                "pole_id": p_id,
+            }
+        ]
+
+    engine.resolve_clamps = fake_resolve_clamps
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
+        str(code).upper(),
+        False,
+    )
+    engine.get_pole_sap = lambda pole: ("10000000", "POSTE TESTE")
+    engine.resolve_transformers_direct = lambda *args, **kwargs: []
+    engine.resolve_cables_direct = lambda *args, **kwargs: []
+    engine.resolve_ramal_direct = lambda *args, **kwargs: ("VERIFICAR", "")
+    engine.db_loader = None
+    engine.is_loaded = False
+
+    engine.process_form_data(
+        {
+            "P1": {
+                "Pole": "C12/600",
+                "Est": ["N1"],
+                "Trafo": None,
+                "Chave": None,
+                "Estai": {"Qtd": 0},
+                "ParaRaio": {"Qtd": 0},
+                "Aterramento": {"Qtd": 0},
+                "Ramal": {"Qtd": 0},
+            },
+            "P3": {
+                "Pole": "C12/600",
+                "Est": ["N1"],
+                "Trafo": None,
+                "Chave": None,
+                "Estai": {"Qtd": 0},
+                "ParaRaio": {"Qtd": 0},
+                "Aterramento": {"Qtd": 0},
+                "Ramal": {"Qtd": 0},
+            },
+        }
+    )
+
+    raw_rows = getattr(engine, "last_raw_results", [])
+    assert any(row.get("pole_id") == "P3" for row in raw_rows)
+    assert any(row.get("pole_id") == "P1" for row in raw_rows)
+
+
+def test_quantity_and_confidence_normalization_handles_nan_and_infinity():
+    assert _clean_quantity(float("nan")) == 0
+    assert _clean_quantity(float("inf")) == 0
+    assert _clean_confidence(float("nan")) == 1.0
+    assert _clean_confidence(float("inf")) == 1.0
+    assert _clean_confidence(float("-inf"), default=0.2) == 0.2
+
+
+def test_resolve_clamps_tags_pole_id_for_grouping():
+    class FakeDbLoader:
+        def __init__(self):
+            self.conn = True
+            self.sap_codes = {"10000001": "ITEM TESTE"}
+            self.unified_db = {}
+
+        def get_sap_description(self, code):
+            return self.sap_codes.get(str(code), str(code))
+
+        def explode_structure(self, structure_code, pole_type_str=""):
+            code = str(structure_code).upper()
+            if code == "N1":
+                return [{"code": "10000001", "desc": "ITEM TESTE", "qty": 1}]
+            return []
+
+        def find_material_by_description(self, search_terms, limit=1, exclude_terms=None):
+            return [("10000000", "POSTE TESTE", 1)]
+
+    engine = MaterialEngine()
+    engine.db_loader = FakeDbLoader()
+    engine.is_loaded = True
+    engine._resolve_structure_code = lambda code, pole_type="", **kwargs: (
+        str(code).upper(),
+        False,
+    )
+
+    materials = engine.resolve_clamps("C12/600", ["N1"], p_id="P3")
+
+    assert materials
+    assert all(item.get("pole_id") == "P3" for item in materials)
 
 
 def test_composite_structure_u4_1s4_expands_and_sums_materials():

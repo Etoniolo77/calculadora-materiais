@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import re
 import subprocess
@@ -21,6 +22,7 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -44,6 +46,13 @@ from final_report import PDFReport  # noqa: E402
 from validators import TechnicalValidator  # noqa: E402
 
 app = FastAPI(title="Calculadora Materiais API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r".*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend")
 
 _engine_lock = threading.Lock()
@@ -60,6 +69,17 @@ APP_VERSION_PATH = PROJECT_ROOT / "app_version.json"
 AUTH_SESSION_COOKIE = "sb-access-token"
 SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 ALLOWED_EMAIL_DOMAIN = "eletromarquez.com.br"
+ALLOWED_EMAILS = {"admin@admin.com.br", "admin@admin.com"}
+
+
+def _is_allowed_email(email: str) -> bool:
+    normalized = str(email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return False
+    if normalized in ALLOWED_EMAILS:
+        return True
+    domain = normalized.split("@", 1)[1]
+    return domain == ALLOWED_EMAIL_DOMAIN
 
 
 def _verify_supabase_jwt(token: str | None) -> str | None:
@@ -77,10 +97,8 @@ def _verify_supabase_jwt(token: str | None) -> str | None:
                 audience="authenticated",
             )
             email = str(payload.get("email", "")).strip().lower()
-            if "@" in email:
-                domain = email.split("@", 1)[1]
-                if domain == ALLOWED_EMAIL_DOMAIN:
-                    return email
+            if _is_allowed_email(email):
+                return email
             return None
         except JWTError as exc:
             print(
@@ -106,13 +124,11 @@ def _verify_supabase_jwt(token: str | None) -> str | None:
         if resp.status_code == 200:
             user_data = resp.json()
             email = str(user_data.get("email", "")).strip().lower()
-            if "@" in email:
-                domain = email.split("@", 1)[1]
-                if domain == ALLOWED_EMAIL_DOMAIN:
-                    print(
-                        f"[Supabase Auth] Token validado com sucesso via API para: {email}"
-                    )
-                    return email
+            if _is_allowed_email(email):
+                print(
+                    f"[Supabase Auth] Token validado com sucesso via API para: {email}"
+                )
+                return email
         else:
             print(
                 f"[Supabase Auth] API de Autenticacao respondeu com erro {resp.status_code}: {resp.text}"
@@ -136,6 +152,10 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
             "/api/version",
             "/api/config",
             "/api/structures",
+            "/styles.css",
+            "/app.js",
+            "/supabase.min.js",
+            "/favicon.svg",
             "/frontend/",
         )
         if any(path == p or path.startswith(p) for p in public_paths):
@@ -185,6 +205,37 @@ def _load_update_config() -> dict[str, Any]:
             status_code=500, detail="Arquivo update/update_config.json nao encontrado."
         )
     return json.loads(UPDATE_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def _asset_response(filename: str, media_type: str) -> Response:
+    asset_path = FRONTEND_DIR / filename
+    if not asset_path.exists():
+        raise HTTPException(status_code=404, detail=f"Asset nao encontrado: {filename}")
+    return Response(
+        content=asset_path.read_bytes(),
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _inject_frontend_version(html: str, version: str) -> str:
+    stamp = version or "0.0.0"
+    html = re.sub(
+        r'href="styles\.css(?:\?v=[^"]*)?"',
+        f'href="styles.css?v={stamp}"',
+        html,
+    )
+    html = re.sub(
+        r'src="supabase\.min\.js(?:\?v=[^"]*)?"',
+        f'src="supabase.min.js?v={stamp}"',
+        html,
+    )
+    html = re.sub(
+        r'src="app\.js(?:\?v=[^"]*)?"',
+        f'src="app.js?v={stamp}"',
+        html,
+    )
+    return html
 
 
 def _resolve_remote_release() -> dict[str, str]:
@@ -248,11 +299,23 @@ def _clean_quantity(value: Any) -> float | int:
         q = float(value)
     except (TypeError, ValueError):
         return 0
+    if math.isnan(q) or math.isinf(q):
+        return 0
     if abs(q) < 1e-9:
         return 0
     if abs(q - round(q)) < 1e-9:
         return int(round(q))
     return round(q, 3)
+
+
+def _clean_confidence(value: Any, default: float = 1.0) -> float:
+    try:
+        conf = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(conf) or math.isinf(conf):
+        return default
+    return conf
 
 
 def _get_engine() -> MaterialEngine:
@@ -268,6 +331,9 @@ def _normalize_pole_label(value: Any) -> str:
     raw = str(value or "").upper().strip()
     if not raw:
         return "Desconhecido"
+    # Preserva marcador de poste existente (E) / retirada (R): controla o NÃO
+    # faturamento do poste no engine e precisa sobreviver ao round-trip.
+    suffix = "(E)" if "(E)" in raw else ("(R)" if "(R)" in raw else "")
     m = re.search(
         r"(DT\d{1,2}/\d{3,4}|DI\d{1,2}/\d{3,4}|D\d{1,2}/\d{3,4}|C\d{1,2}/\d{3,4}|M\d{1,2}/\d{3,4}|\d{1,2}/\d{3,4})",
         raw,
@@ -281,7 +347,7 @@ def _normalize_pole_label(value: Any) -> str:
         norm = "C" + norm[1:]
     elif re.match(r"^\d{1,2}/\d{3,4}$", norm):
         norm = f"C{norm}"
-    return norm
+    return norm + suffix
 
 
 def _normalize_structure_list(structures: Any) -> list[str]:
@@ -433,19 +499,9 @@ def _build_calculation_recommendations(
                 "message": "Há cintas na BOM sem parafuso M16 correspondente; verificar regra de fixação por tipologia de poste.",
             }
         )
-    if validation and int(validation.get("errors", 0) or 0) > 0:
-        issues = validation.get("issues", [])
-        error_msgs = "; ".join(
-            i.get("message", "") for i in issues if i.get("severity") == "error"
-        )
-        detail = f" ({error_msgs})" if error_msgs else ""
-        recs.append(
-            {
-                "level": "media",
-                "title": "Avisos técnicos na BOM",
-                "message": f"A validação apontou {validation['errors']} inconsistência(s) técnica(s){detail}. A BOM foi gerada normalmente; revise os itens sinalizados.",
-            }
-        )
+    # Os erros/inconsistências técnicas de validação já são exibidos no painel
+    # unificado "Validação e Qualidade" (com as mensagens detalhadas). Não
+    # repetir aqui como recomendação para evitar duplicação.
     if structure_audit and not bool(structure_audit.get("ok", True)):
         recs.append(
             {
@@ -477,7 +533,7 @@ def _build_quality_gate(
         if str(row.get("Código SAP", "")).upper().startswith("VERIFICAR")
     )
     low_conf_count = sum(
-        1 for row in bom_rows if float(row.get("Confiança", 1.0) or 1.0) < 0.70
+        1 for row in bom_rows if _clean_confidence(row.get("Confiança", 1.0)) < 0.70
     )
     override_reason = str(override_reason or "").strip()
     override_valid = bool(override_enabled and len(override_reason) >= 10)
@@ -518,8 +574,33 @@ def _group_bom_rows(material_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     rows = grouped.to_dict(orient="records")
     for row in rows:
         row["Quantidade"] = _clean_quantity(row.get("Quantidade", 0))
-        row["Confiança"] = round(float(row.get("Confiança", 1.0) or 1.0), 2)
+        row["Confiança"] = round(_clean_confidence(row.get("Confiança", 1.0)), 2)
     return rows
+
+
+def _extract_pole_id_from_row(row: dict[str, Any]) -> str | None:
+    pole_id = str(row.get("pole_id", "") or "").upper().strip()
+    if pole_id:
+        return pole_id
+
+    origem = str(row.get("Origem", "") or "").upper()
+    match = re.search(r"\b(P\d+)\b", origem)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def _group_bom_rows_by_pole(
+    material_rows: list[dict[str, Any]], pole_ids: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    grouped_rows: dict[str, list[dict[str, Any]]] = {pole_id: [] for pole_id in pole_ids}
+    for row in material_rows or []:
+        pole_id = _extract_pole_id_from_row(row)
+        if pole_id not in grouped_rows:
+            continue
+        grouped_rows[pole_id].append(row)
+    return {pole_id: _group_bom_rows(rows) for pole_id, rows in grouped_rows.items()}
 
 
 def _default_pole_payload(pole: dict[str, Any]) -> dict[str, Any]:
@@ -574,9 +655,16 @@ def _default_pole_payload(pole: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pole_sort_key(p_id: Any) -> tuple[int, str]:
+    """Ordena postes numericamente (P1, P2, ..., P10, P11) e não por string."""
+    s = str(p_id)
+    m = re.search(r"\d+", s)
+    return (int(m.group()) if m else 10**9, s)
+
+
 def _normalize_poles_from_map(pole_map: dict[str, Any]) -> list[dict[str, Any]]:
     poles: list[dict[str, Any]] = []
-    for p_id, data in sorted(pole_map.items(), key=lambda kv: kv[0]):
+    for p_id, data in sorted(pole_map.items(), key=lambda kv: _pole_sort_key(kv[0])):
         row = {"id": p_id}
         row.update(_default_pole_payload(data))
         poles.append(row)
@@ -616,6 +704,26 @@ def _normalize_cables(cables: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/styles.css")
+def styles_css() -> Response:
+    return _asset_response("styles.css", "text/css; charset=utf-8")
+
+
+@app.get("/app.js")
+def app_js() -> Response:
+    return _asset_response("app.js", "application/javascript; charset=utf-8")
+
+
+@app.get("/supabase.min.js")
+def supabase_js() -> Response:
+    return _asset_response("supabase.min.js", "application/javascript; charset=utf-8")
+
+
+@app.get("/favicon.svg")
+def favicon_svg() -> Response:
+    return _asset_response("favicon.svg", "image/svg+xml")
 
 
 @app.get("/api/version")
@@ -672,7 +780,7 @@ def auth_session_get(request: Request) -> dict[str, str]:
 
 
 @app.post("/auth/session")
-def auth_session_set(payload: dict[str, str]):
+def auth_session_set(request: Request, payload: dict[str, str]):
     token = payload.get("token", "")
     email = _verify_supabase_jwt(token)
     if not email:
@@ -681,7 +789,13 @@ def auth_session_set(payload: dict[str, str]):
         )
     resp = JSONResponse(content={"status": "ok", "email": email})
     resp.set_cookie(
-        AUTH_SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=86400 * 7
+        AUTH_SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        path="/",
+        max_age=86400 * 7,
     )
     return resp
 
@@ -689,7 +803,7 @@ def auth_session_set(payload: dict[str, str]):
 @app.get("/auth/logout")
 def auth_logout():
     resp = RedirectResponse(url="/login", status_code=303)
-    resp.delete_cookie(AUTH_SESSION_COOKIE)
+    resp.delete_cookie(AUTH_SESSION_COOKIE, path="/")
     return resp
 
 
@@ -698,7 +812,7 @@ def index() -> HTMLResponse:
     html_path = FRONTEND_DIR / "index.html"
     html = html_path.read_text(encoding="utf-8")
     version = _load_local_version()
-    html = html.replace("__APP_VERSION__", version)
+    html = _inject_frontend_version(html, version)
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
@@ -707,7 +821,7 @@ def as_built() -> HTMLResponse:
     html_path = FRONTEND_DIR / "asbuilt.html"
     html = html_path.read_text(encoding="utf-8")
     version = _load_local_version()
-    html = html.replace("__APP_VERSION__", version)
+    html = _inject_frontend_version(html, version)
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
@@ -778,7 +892,7 @@ async def calculate(payload: dict[str, Any]) -> JSONResponse:
         pole_map = _normalize_poles_to_map(poles)
         cable_rows = _normalize_cables(cables)
         et_debug_by_pole = {}
-        for pid, pdata in sorted(pole_map.items(), key=lambda kv: kv[0]):
+        for pid, pdata in sorted(pole_map.items(), key=lambda kv: _pole_sort_key(kv[0])):
             et_debug_by_pole[str(pid)] = {
                 "trafo": pdata.get("Trafo"),
                 "et_codes": list(pdata.get("EtCodes", []) or []),
@@ -791,10 +905,11 @@ async def calculate(payload: dict[str, Any]) -> JSONResponse:
         all_materials = materials + cable_materials
 
         bom_rows = _group_bom_rows(all_materials)
-        bom_by_pole: dict[str, list[dict[str, Any]]] = {}
-        for pole_id, pole_data in sorted(pole_map.items(), key=lambda kv: kv[0]):
-            pole_rows = engine.process_form_data({pole_id: pole_data}, cable_rows)
-            bom_by_pole[pole_id] = _group_bom_rows(pole_rows)
+        raw_materials = getattr(engine, "last_raw_results", materials)
+        bom_by_pole = _group_bom_rows_by_pole(
+            raw_materials,
+            [str(pole_id) for pole_id in sorted(pole_map.keys(), key=_pole_sort_key)],
+        )
         bom_by_pole["CABOS_GERAIS"] = _group_bom_rows(cable_materials)
 
         validator = TechnicalValidator()

@@ -73,3 +73,6 @@ cd backend
 python run_server.py
 # Ou: uvicorn app_fastapi:app --port 8600 --reload
 ```
+
+## Identidade visual
+`.agent/skills/references/brand-identity.md` — frontend vanilla deve seguir paleta `#01458e` e assinatura `Evandro Toniolo · Eletromarquez`.
