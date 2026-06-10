@@ -1,5 +1,17 @@
 # Changelog — Calculadora de Materiais
 
+## 1.0.35 — 2026-06-10
+
+### Autenticação Supabase (`frontend/app.js`, `frontend/login.html`)
+- **Correção "Sessão inválida ou expirada no Supabase"**: o cookie do backend guardava o
+  `access_token` (que expira em 1h) com validade de 7 dias, mas o `refresh_token` nunca era
+  reaproveitado — após ~1h toda chamada `/api/*` retornava 401.
+- O cliente Supabase passa a usar `persistSession` + `autoRefreshToken` explícitos e re-sincroniza
+  o cookie do backend em `TOKEN_REFRESHED`/`SIGNED_IN` (`onAuthStateChange`).
+- `ensureAuthenticatedSession` agora renova proativamente a sessão (margem de 60s) antes de sincronizar.
+- `apiFetch` recupera 401 automaticamente: renova a sessão, re-sincroniza o cookie e refaz a
+  requisição uma vez antes de redirecionar ao login.
+
 ## 1.0.34 — 2026-06-06
 
 ### Extrator (`core/extractor.py`)

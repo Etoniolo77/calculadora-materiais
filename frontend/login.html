@@ -281,7 +281,7 @@
       </form>
 
       <div class="footer-info">
-        Calculadora de Materiais v1.0.34 | Eletromarquez
+        Calculadora de Materiais v1.0.35 | Eletromarquez
       </div>
     </main>
   </div>
@@ -316,8 +316,16 @@
           throw new Error('Biblioteca do Supabase não carregada.');
         }
 
-        // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente
-        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente.
+        // persistSession garante que o refresh_token fique salvo para o app.js
+        // renovar a sessao depois que o access_token (1h) expirar.
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: false,
+          },
+        });
 
         await supabaseClient.auth.getSession();
       } catch (err) {
