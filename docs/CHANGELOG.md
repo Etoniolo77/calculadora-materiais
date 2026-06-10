@@ -1,5 +1,15 @@
 # Changelog — Calculadora de Materiais
 
+## 1.0.36 — 2026-06-10
+
+### Engine (`core/engine.py`)
+- **Cabo MT NX2ANA — multiplicador de vias dinâmico** (`resolve_cables_direct`): o
+  número de vias de 2AWG SPARROW (fases) agora vem do prefixo "NX" da descrição
+  (3X→3, 1X/sem prefixo→1) em vez de fixo em 3. O neutro 4AWG ROSE segue 1× o trecho.
+  Corrige OV 4001739539, onde uma derivação **1F** (`MT 1x2ANA(4ANA)`) faturava
+  304.38 m de SPARROW (101.46 × 3) quando o correto é 101.46 m.
+- Teste de regressão `test_mt_cable_sparrow_multiplier_follows_phase_count`.
+
 ## 1.0.35 — 2026-06-10
 
 ### Autenticação Supabase (`frontend/app.js`, `frontend/login.html`)

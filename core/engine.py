@@ -1654,10 +1654,15 @@ class MaterialEngine:
                     termos_busca.append(numeros[-1])
 
             if self.db_loader:
-                # Regra determinística para cabo MT 3X2ANA(4ANA):
-                #  - 1 via de 4AWG ROSE (mesma metragem do trecho)
-                #  - 3 vias de 2AWG SPARROW (3 x metragem do trecho)
+                # Regra determinística para cabo MT NX2ANA(4ANA):
+                #  - 1 via de 4AWG ROSE (neutro, sempre 1 x metragem do trecho)
+                #  - N vias de 2AWG SPARROW (fases), onde N vem do prefixo "NX"
+                #    da descrição: 3X2ANA -> 3 (trifásico); 1X2ANA / sem prefixo
+                #    -> 1 (monofásico). Antes era fixo em 3, faturando 3x o SPARROW
+                #    em derivações 1F/2F.
                 if tipo == "MT" and ("2ANA" in desc_up or "4ANA" in desc_up or "2AN" in desc_up or "4AN" in desc_up):
+                    m_vias = re.search(r"(\d+)\s*X\s*\d*\s*AN", desc_up)
+                    n_vias = int(m_vias.group(1)) if m_vias else 1
                     mats.append(
                         {
                             "Origem": f"Cabo {tipo}",
@@ -1674,7 +1679,7 @@ class MaterialEngine:
                             "Código SAP": "10050898",
                             "Descrição": self.db_loader.get_sap_description("10050898")
                             or "CABO NU CAA AL 2AWG SPARROW",
-                            "Quantidade": qtd * 3,
+                            "Quantidade": qtd * n_vias,
                             "Confiança": 0.98,
                         }
                     )

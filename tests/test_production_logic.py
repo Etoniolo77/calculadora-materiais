@@ -540,3 +540,48 @@ def test_detect_smtr_variant_maps_3x70_signature_to_4c_variant():
     )
 
     assert variant == "SMTR - CABO AL 4C 3X70MM2+70MM2 1KV"
+
+
+def test_mt_cable_sparrow_multiplier_follows_phase_count():
+    """Regressão OV 4001739539: cabo MT NX2ANA fatura N vias de SPARROW
+    (fases) + 1 via de ROSE (neutro). Antes era fixo em 3x, inflando o
+    SPARROW em derivações monofásicas/bifásicas."""
+
+    class FakeDbLoader:
+        def get_sap_description(self, code):
+            return {
+                "10050897": "CABO NU ALUMINIO 4AWG 7F ROSE",
+                "10050898": "CABO NU CAA AL 2AWG SPARROW",
+            }.get(str(code), str(code))
+
+        def find_material_by_description(self, search_terms, limit=1, exclude_terms=None):
+            return []
+
+    def _sparrow_rose(desc, qtd):
+        engine = MaterialEngine()
+        engine.db_loader = FakeDbLoader()
+        engine.is_loaded = True
+        engine.detected_cables = {"MT": None, "BT": None}
+        mats = engine.resolve_cables_direct([{"Tipo": "MT", "Desc": desc, "Qtd": qtd}])
+        by_sap = {m["Código SAP"]: float(m["Quantidade"]) for m in mats}
+        return by_sap.get("10050898"), by_sap.get("10050897")
+
+    # Monofásico (1X) — caso reportado: SPARROW = metragem, não 3x.
+    sparrow, rose = _sparrow_rose("MT 1X2ANA(4ANA)", 101.46)
+    assert sparrow == 101.46
+    assert rose == 101.46
+
+    # Sem prefixo NX também é tratado como 1 via.
+    sparrow, rose = _sparrow_rose("MT 2ANA(4ANA)", 101.46)
+    assert sparrow == 101.46
+    assert rose == 101.46
+
+    # Bifásico (2X) — 2 vias de SPARROW.
+    sparrow, rose = _sparrow_rose("MT 2X2ANA(4ANA)", 100.0)
+    assert sparrow == 200.0
+    assert rose == 100.0
+
+    # Trifásico (3X) — comportamento original preservado (3 vias).
+    sparrow, rose = _sparrow_rose("MT 3X2ANA(4ANA)", 100.0)
+    assert sparrow == 300.0
+    assert rose == 100.0
