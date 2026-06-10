@@ -585,3 +585,50 @@ def test_mt_cable_sparrow_multiplier_follows_phase_count():
     sparrow, rose = _sparrow_rose("MT 3X2ANA(4ANA)", 100.0)
     assert sparrow == 300.0
     assert rose == 100.0
+
+
+def test_trafo_pole_uses_supabase_structure_not_legacy_kit():
+    """Regressão OV 4001739539: poste com estrutura ET de trafo deve usar a
+    estrutura do Supabase (códigos novos) e NÃO o kit legado do unified_db
+    (códigos velhos). Também valida que o M16 por cinta não é mais injetado e
+    que a cordoalha de aterramento vira metragem (15 m)."""
+    engine = MaterialEngine()
+    engine.load_databases()
+    if not engine.is_loaded:
+        import pytest
+
+        pytest.skip("Supabase indisponível para teste de integração")
+
+    pole_map = {
+        "P4": {
+            "Pole": "C12/600",
+            "Est": ["ET1T"],
+            "Trafo": "MONO-15KVA",
+            "Chave": None,
+            "Estai": {"Qtd": 0},
+            "ParaRaio": {"Qtd": 0},
+            "Aterramento": {"Qtd": 1},
+            "Ramal": {"Qtd": 0},
+            "EtCodes": ["ET123456"],
+        }
+    }
+    res = engine.process_form_data(pole_map)
+    by_code = {str(r["Código SAP"]): r for r in res}
+
+    # Códigos VELHOS do kit legado não podem aparecer.
+    for old in ("10002581", "10004254", "10010733", "10011197", "10012874"):
+        assert old not in by_code, f"código velho {old} não deveria aparecer"
+
+    # Trafo deve ser o código novo, sem duplicar.
+    trafos = [r for r in res if "TRAFO" in str(r["Descrição"]).upper()]
+    assert len(trafos) == 1
+    assert str(trafos[0]["Código SAP"]) == "10057259"
+
+    # M16 por cinta (30058226) não deve ser injetado pela regra removida.
+    m16 = [r for r in res if str(r["Código SAP"]) == "30058226"
+           and str(r.get("Origem", "")).startswith("Fixacao cinta")]
+    assert not m16
+
+    # Cordoalha de aterramento vira metragem (15 m por descida).
+    cord = by_code.get("30054511")
+    assert cord is not None and float(cord["Quantidade"]) == 15.0
