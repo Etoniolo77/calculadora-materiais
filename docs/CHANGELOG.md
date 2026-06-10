@@ -1,5 +1,27 @@
 # Changelog — Calculadora de Materiais
 
+## 1.0.38 — 2026-06-10 — Fonte única: Excel "Lista Consolidada" + Aplicação
+
+Correção definitiva da composição de estruturas (supersede os tapa-buracos da 1.0.37).
+
+### Dados / pipeline
+- **Reimportação fiel do Excel mestre** (`scripts/utils_and_deploy/import_estruturas_aplicacao.py`):
+  a aba "Lista Consolidada" passa a ser a fonte única. `estrutura_materiais` ganha a
+  coluna **`aplicacao`** (por material) e as **quantidades em texto** são parseadas
+  (`"4,5MTS"`→4.5; `"2,4KG (15MTS)"`→15). `estruturas` colapsa para 1 linha por código.
+  Backup das tabelas antigas em `data/_backup_mestre/`.
+
+### Engine (`core/database_sqlite.py`, `core/aplicacao.py`)
+- **`explode_structure` seleciona material por tipo de poste** via a coluna Aplicação
+  (`aplicacao_matches`): `ALL`, `12X600 CIRCULAR`, `TODOS EXETO 11X300DT…`, `NO CABO …`.
+  Acaba com o "menu" de cintas/suportes — cada poste recebe só o que se aplica a ele.
+- Resolve de uma vez, na fonte: cintas/suportes por diâmetro, quantidades de cabo
+  protegido (4,5) e cordoalha (15 m), e remove os códigos velhos. Validado no OV
+  4001739539 (P4 C12/600: cintas B-20:2/B-24:1, suporte 255mm:2, sem 240mm).
+
+### Validação
+- 36 testes unitários + regressão dos 13 PDFs (13 OK, 0 mismatches acionáveis).
+
 ## 1.0.37 — 2026-06-10
 
 ### Engine (`core/engine.py`) — correções de BOM do trafo (OV 4001739539)

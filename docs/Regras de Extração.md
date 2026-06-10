@@ -195,11 +195,26 @@ A montagem do poste-trafo segue o Supabase como **fonte única**:
   do 6** (`30058699`) — basta virar a peça. Por isso `9 → 30058699`.
 - **Cordoalha de aterramento** (`30054511`): quantidade unitária (placeholder) das
   estruturas vira **15 m por descida**.
-- **Cinta/suporte por diâmetro** *(pendente)*: a estrutura de trafo no banco lista um
-  "menu" de diâmetros (cinta B-18..B-38, suporte 240–400mm). A seleção do item correto
-  por diâmetro do poste usa o `cinta_lookup` (tabela canônica por poste × categoria
-  CINTA/NIVEL/ESTAI/RECK, níveis 1 e 2). A seleção do **suporte** por diâmetro ainda
-  carece de regra/tabela.
+- **Cinta/suporte por diâmetro**: resolvido pela coluna **Aplicação** (ver §8.3).
+
+## 8.3 Fonte única: Excel "Lista Consolidada" e coluna Aplicação
+
+A composição das estruturas vem do Excel
+`docs/Referencia_Tecnica/ESTRUTURAS PARA CALCULADORA MATERIAS.xlsx`, aba **"Lista
+Consolidada"** (`Estrutura | Código Hana | Descrição | Quantidade | Aplicação`).
+É a **fonte única** — não usar `unified_db.json`/`hardware_kits` para isso.
+
+- **Importação** (`scripts/utils_and_deploy/import_estruturas_aplicacao.py`): grava
+  `estrutura_materiais` com a coluna `aplicacao` (por material) e quantidade já
+  numérica (`core.aplicacao.parse_qty_text` converte `"4,5MTS"`→4.5,
+  `"2,4KG (15MTS)"`→15). `estruturas` tem 1 linha por código (`tipo_poste='ALL'`).
+- **Seleção por poste** (`explode_structure` + `core.aplicacao.aplicacao_matches`):
+  cada material só entra na BOM se sua Aplicação casar com o tipo de poste:
+  `ALL` (sempre), `12X600 CIRCULAR` (porte+subtipo), `TODOS EXETO 11X300DT…`
+  (todos menos os listados), `NO CABO …` (variante por cabo, não filtra por poste).
+  `pole_signature("C12/600") = (12, 600, CIRCULAR)`; subtipo DT vem de `DT/RT` no tipo.
+- Toda quantidade/composição/diâmetro nasce aqui. Para corrigir BOM, editar o Excel
+  e rodar o importador — não tocar no engine.
 
 ## 9. Saída e ordenação
 

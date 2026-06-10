@@ -18,6 +18,11 @@ try:
 except ImportError:
     from project_paths import OFFICIAL_UNIFIED_DB_PATH, BACKEND_DIR  # type: ignore
 
+try:
+    from .aplicacao import aplicacao_matches
+except ImportError:
+    from aplicacao import aplicacao_matches  # type: ignore
+
 # Carregar variáveis do .env do backend
 ENV_PATH = BACKEND_DIR / ".env"
 if ENV_PATH.exists():
@@ -349,101 +354,64 @@ class SupabaseDatabaseLoader:
         if cache_key in self._explode_structure_cache:
             return list(self._explode_structure_cache[cache_key])
 
-        is_dt = False
-        if pole_type_str:
-            p_upper = str(pole_type_str).upper()
-            if (
-                p_upper.startswith("DT")
-                or p_upper.startswith("RT")
-                or "DUPLO T" in p_upper
-            ):
-                is_dt = True
-
-        tipo_filtro = "DT" if is_dt else "CIRCULAR"
-
         try:
             with conn.cursor() as cursor:
-                # Busca estruturas que correspondem ao código e tipo de poste
+                # Modelo Aplicação: 1 linha por código em `estruturas`; cada material
+                # carrega sua coluna `aplicacao`. A seleção por tipo de poste é feita
+                # aqui via aplicacao_matches (fonte de verdade = Excel "Lista Consolidada").
                 cursor.execute(
                     """
-                    SELECT id, tipo_poste
-                    FROM estruturas
-                    WHERE codigo = %s AND (tipo_poste = %s OR tipo_poste = 'ALL')
-                    ORDER BY CASE WHEN tipo_poste = %s THEN 0 ELSE 1 END
+                    SELECT em.material_codigo, em.material_descricao,
+                           em.quantidade, em.aplicacao
+                    FROM estrutura_materiais em
+                    JOIN estruturas e ON e.id = em.estrutura_id
+                    WHERE e.codigo = %s
                     """,
-                    (structure_code, tipo_filtro, tipo_filtro),
+                    (structure_code,),
                 )
-                estruturas = cursor.fetchall()
+                fetched = cursor.fetchall()
 
-                # Fallback: se não achar com filtro, tenta achar qualquer uma com esse código
-                if not estruturas:
+                if not fetched:
+                    # Distinguir "estrutura inexistente" de "existe mas sem material".
                     cursor.execute(
-                        "SELECT id FROM estruturas WHERE codigo = %s",
+                        "SELECT 1 FROM estruturas WHERE codigo = %s LIMIT 1",
                         (structure_code,),
                     )
-                    estruturas = cursor.fetchall()
-
-                if not estruturas:
-                    print(
-                        f"[AVISO] Estrutura {structure_code} não encontrada no Supabase"
-                    )
-                    result = [
-                        {
-                            "code": "VERIFICAR",
-                            "desc": f"VERIFICAR ESTRUTURA {structure_code}",
-                            "qty": 1,
-                        }
-                    ]
-                    self._explode_structure_cache[cache_key] = result
-                    return list(result)
-
-                materials = []
-                seen_materials = set()
-                
-                for est_row in estruturas:
-                    est_id = est_row[0]
-
-                    cursor.execute(
-                        """
-                        SELECT material_codigo, material_descricao, quantidade
-                        FROM estrutura_materiais
-                        WHERE estrutura_id = %s
-                        """,
-                        (est_id,),
-                    )
-
-                    for mat_row in cursor.fetchall():
-                        m_code = str(mat_row[0] or "").strip()
-                        m_desc = str(mat_row[1] or "").strip()
-                        m_qty = float(mat_row[2] or 0)
-                        
-                        dedupe_key = (m_code, m_desc, m_qty)
-                        if dedupe_key in seen_materials:
-                            continue
-                        seen_materials.add(dedupe_key)
-                        
-                        materials.append(
-                            {
-                                "code": m_code,
-                                "desc": m_desc or self.get_sap_description(m_code),
-                                "qty": m_qty,
-                            }
+                    if cursor.fetchone() is None:
+                        print(
+                            f"[AVISO] Estrutura {structure_code} não encontrada no Supabase"
                         )
+                        result = [
+                            {
+                                "code": "VERIFICAR",
+                                "desc": f"VERIFICAR ESTRUTURA {structure_code}",
+                                "qty": 1,
+                            }
+                        ]
+                        self._explode_structure_cache[cache_key] = result
+                        return list(result)
 
-                if not materials:
-                    print(
-                        f"[AVISO] Estrutura {structure_code} sem composição no Supabase"
-                    )
-                    result = [
-                        {
-                            "code": "VERIFICAR",
-                            "desc": f"VERIFICAR ESTRUTURA {structure_code}",
-                            "qty": 1,
-                        }
-                    ]
-                    self._explode_structure_cache[cache_key] = result
-                    return list(result)
+                # Filtra por aplicabilidade do poste e soma por código.
+                agg: dict[str, dict] = {}
+                for m_code, m_desc, m_qty, m_apl in fetched:
+                    code = str(m_code or "").strip()
+                    if not code:
+                        continue
+                    if not aplicacao_matches(str(m_apl or ""), pole_type_str):
+                        continue
+                    try:
+                        qty = float(m_qty or 0)
+                    except (TypeError, ValueError):
+                        qty = 0.0
+                    desc = str(m_desc or "").strip() or self.get_sap_description(code)
+                    if code in agg:
+                        agg[code]["qty"] += qty
+                    else:
+                        agg[code] = {"code": code, "desc": desc, "qty": qty}
 
+                # Estrutura existe; lista pode ser vazia se nenhum material aplica
+                # ao tipo de poste (comportamento correto, não é "não encontrada").
+                materials = list(agg.values())
                 self._explode_structure_cache[cache_key] = materials
                 return list(materials)
 
