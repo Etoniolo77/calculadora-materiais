@@ -1,5 +1,31 @@
 # Changelog — Calculadora de Materiais
 
+## 1.0.37 — 2026-06-10
+
+### Engine (`core/engine.py`) — correções de BOM do trafo (OV 4001739539)
+- **Poste-trafo migrado para o Supabase como fonte única**: quando o poste tem
+  estrutura ET de trafo resolvível no banco (ET1T/ET4A/ET1BR), o transformador e
+  acessórios vêm dessa estrutura (códigos novos). O caminho legado
+  (`resolve_transformers_direct` textual + `hardware_kits` do unified_db +
+  suporte hardcoded) é pulado. Elimina códigos velhos duplicados (10002581,
+  10004254, 10010733, 10011197, 10012874) e o trafo duplicado.
+- **Parafuso M16 (30058226) por cinta removido**: as estruturas do banco já
+  trazem seus parafusos; a regra duplicava (aparecia em P2/P3).
+- **Cordoalha de aterramento (30054511)**: placeholder unitário vira 15 m por descida.
+- **Película dígito 9 → 30058699** (mesma do 6, basta virar); resolve token órfão
+  e a soma correta quando o código tem 6 e 9.
+
+### Dados
+- **`cinta_lookup` (data/unified_db.json)** corrigido/expandido com a tabela
+  canônica de diâmetros por poste e categoria (CINTA/NIVEL/ESTAI/RECK níveis 1 e 2).
+  Antes só havia "CINTA 1" com o maior diâmetro (ex.: 12/600 = 240; correto = 200).
+- **Supabase `estrutura_materiais`**: cabo protegido 16mm (30051709) ajustado de 1
+  para **4.5** nas 12 estruturas ET de trafo monofásico.
+
+> Pendente nesta versão: seleção de cinta/suporte por diâmetro na estrutura de
+> trafo (menu B-18..B-38 / suportes 240–400mm) — requer regra de suporte e
+> validação com a extração real do projeto.
+
 ## 1.0.36 — 2026-06-10
 
 ### Engine (`core/engine.py`)

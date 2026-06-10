@@ -16400,33 +16400,88 @@
       }
     ]
   },
-  "cinta_lookup": {
+  "cinta_lookup":   {
     "9/300": {
-      "CINTA 1": 200
+      "CINTA 1": 180,
+      "NIVEL 1": 180,
+      "ESTAI 1": 180,
+      "RECK 1": 200
     },
     "9/600": {
-      "CINTA 1": 220
+      "CINTA 1": 200,
+      "NIVEL 1": 200,
+      "ESTAI 1": 200,
+      "RECK 1": 220
     },
     "12/300": {
-      "CINTA 1": 220
+      "CINTA 1": 180,
+      "NIVEL 1": 180,
+      "ESTAI 1": 180,
+      "RECK 1": 200,
+      "CINTA 2": 200,
+      "NIVEL 2": 200,
+      "ESTAI 2": 200,
+      "RECK 2": 220
     },
     "12/600": {
-      "CINTA 1": 240
+      "CINTA 1": 200,
+      "NIVEL 1": 200,
+      "ESTAI 1": 200,
+      "RECK 1": 220,
+      "CINTA 2": 220,
+      "NIVEL 2": 220,
+      "ESTAI 2": 220,
+      "RECK 2": 240
     },
     "12/1000": {
-      "CINTA 1": 280
+      "CINTA 1": 240,
+      "NIVEL 1": 240,
+      "ESTAI 1": 240,
+      "RECK 1": 260,
+      "CINTA 2": 260,
+      "NIVEL 2": 260,
+      "ESTAI 2": 260,
+      "RECK 2": 280
     },
     "12/1500": {
-      "CINTA 1": 340
+      "CINTA 1": 300,
+      "NIVEL 1": 300,
+      "ESTAI 1": 300,
+      "RECK 1": 320,
+      "CINTA 2": 320,
+      "NIVEL 2": 320,
+      "ESTAI 2": 320,
+      "RECK 2": 340
     },
     "13/1000": {
-      "CINTA 1": 280
+      "CINTA 1": 240,
+      "NIVEL 1": 240,
+      "ESTAI 1": 240,
+      "RECK 1": 260,
+      "CINTA 2": 260,
+      "NIVEL 2": 260,
+      "ESTAI 2": 260,
+      "RECK 2": 280
     },
     "13/1500": {
-      "CINTA 1": 340
+      "CINTA 1": 300,
+      "NIVEL 1": 300,
+      "ESTAI 1": 300,
+      "RECK 1": 320,
+      "CINTA 2": 320,
+      "NIVEL 2": 320,
+      "ESTAI 2": 320,
+      "RECK 2": 340
     },
     "14/1000": {
-      "CINTA 1": 280
+      "CINTA 1": 240,
+      "NIVEL 1": 240,
+      "ESTAI 1": 240,
+      "RECK 1": 260,
+      "CINTA 2": 260,
+      "NIVEL 2": 260,
+      "ESTAI 2": 260,
+      "RECK 2": 280
     }
   },
   "hardware_kits": {

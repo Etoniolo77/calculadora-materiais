@@ -131,6 +131,10 @@ ESTF_STICKER_MAP = {
     "6": "30058699",
     "7": "30058700",
     "8": "30058701",
+    # O dígito 9 usa a MESMA película do 6 (basta virar a peça de cabeça p/ baixo).
+    # Mapear 9→30058699 evita token órfão e, em códigos que tenham 6 e 9, soma
+    # corretamente 2 unidades da película "6".
+    "9": "30058699",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
