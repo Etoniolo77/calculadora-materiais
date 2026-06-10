@@ -10,7 +10,7 @@
 > `scripts/validate_pdf_regression_batch.py` (regressão extrator+engine+BOM) sobre
 > os 13 PDFs em `docs/Diagramas de Testes/`.
 
-**Atualizado:** 2026-06-06
+**Atualizado:** 2026-06-10
 
 ---
 
@@ -152,6 +152,30 @@ SMTR (montagem de rede secundária) e SMFL escolhem sua variante pela **bitola d
 
 > O engine pula cabos com `(E)` no faturamento (`resolve_cables_direct`), mas a detecção de
 > variante lê a bitola — resolvendo SMTR/SMFL mesmo quando a rede secundária é pré-existente.
+
+### 8.1 Cabo MT nu CAA `NX2ANA(4ANA)` → ROSE + SPARROW
+
+Cabo MT nu de alumínio/CAA descrito como `NX2ANA(4ANA)` (gatilho: `tipo == "MT"` e a
+descrição contém `2ANA`/`4ANA`/`2AN`/`4AN`) é desdobrado em duas linhas de BOM em
+`resolve_cables_direct`:
+
+| Código SAP | Material | Função | Quantidade |
+|------------|----------|--------|------------|
+| `10050897` | CABO NU ALUMINIO 4AWG 7F ROSE | **neutro** | `metragem` (sempre 1× o trecho) |
+| `10050898` | CABO NU CAA AL 2AWG SPARROW | **fase(s)** | `metragem × N` |
+
+- **`N` (nº de vias/fases)** vem do prefixo `NX` da descrição: `3X2ANA → 3` (trifásico),
+  `2X2ANA → 2` (bifásico), `1X2ANA` ou sem prefixo → `1` (monofásico). Parse:
+  `re.search(r"(\d+)\s*X\s*\d*\s*AN", desc_up)`, default `1`.
+- **Por que SPARROW é a fase e ROSE o neutro:** em AWG, número menor = condutor mais grosso;
+  2AWG (SPARROW) > 4AWG (ROSE), então o SPARROW carrega carga (fases) e o ROSE é o neutro.
+- **Regressão (OV 4001739539):** antes o multiplicador era fixo em `3`, faturando 3× o
+  SPARROW em derivações 1F/2F. `MT 1x2ANA(4ANA)` com 101.46 m saía 304.38 m; agora sai
+  101.46 m. Coberto por `tests/test_production_logic.py::test_mt_cable_sparrow_multiplier_follows_phase_count`.
+
+> **Atenção (escopo futuro):** o gatilho é amplo (qualquer MT com `2AN`/`4AN`). Bitolas
+> diferentes que usem nomenclatura parecida (ex.: `1/0`, `4/0` CAA) cairiam nesta regra e
+> mapeariam para ROSE/SPARROW — revisar caso surjam.
 
 ---
 
