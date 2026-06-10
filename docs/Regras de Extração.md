@@ -179,6 +179,28 @@ descrição contém `2ANA`/`4ANA`/`2AN`/`4AN`) é desdobrado em duas linhas de B
 
 ---
 
+## 8.2 Poste com transformador (fonte = Supabase)
+
+A montagem do poste-trafo segue o Supabase como **fonte única**:
+
+- Se o poste tem uma estrutura ET de trafo resolvível no banco (`ET1T`/`ET4A`/`ET1BR`,
+  resolvida por `_resolve_contextual_structure_code` para o código completo como
+  `ET1T- MONO 15KVA 1F`), o **transformador e todos os acessórios vêm dessa estrutura**
+  (códigos novos). O caminho legado é **pulado** (`trafo_from_db_structure`):
+  `resolve_transformers_direct` (busca textual do trafo), os `hardware_kits` do
+  `unified_db.json` (`TRAFO_MONO`/`TRAFO_TRI_45`, **códigos velhos**) e o suporte
+  hardcoded. Sem isso, novos e velhos coexistiam (10002581, 10004254, 10010733,
+  10011197, 10012874 duplicados).
+- **Película de identificação** (`ESTF_STICKER_MAP`): o dígito **9 usa a mesma película
+  do 6** (`30058699`) — basta virar a peça. Por isso `9 → 30058699`.
+- **Cordoalha de aterramento** (`30054511`): quantidade unitária (placeholder) das
+  estruturas vira **15 m por descida**.
+- **Cinta/suporte por diâmetro** *(pendente)*: a estrutura de trafo no banco lista um
+  "menu" de diâmetros (cinta B-18..B-38, suporte 240–400mm). A seleção do item correto
+  por diâmetro do poste usa o `cinta_lookup` (tabela canônica por poste × categoria
+  CINTA/NIVEL/ESTAI/RECK, níveis 1 e 2). A seleção do **suporte** por diâmetro ainda
+  carece de regra/tabela.
+
 ## 9. Saída e ordenação
 
 - Postes retornados ordenados **numericamente** (`P1, P2, ..., P10, P11`), não lexicográfico
