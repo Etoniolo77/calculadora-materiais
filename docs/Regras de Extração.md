@@ -10,7 +10,7 @@
 > `scripts/validate_pdf_regression_batch.py` (regressão extrator+engine+BOM) sobre
 > os 13 PDFs em `docs/Diagramas de Testes/`.
 
-**Atualizado:** 2026-06-06
+**Atualizado:** 2026-06-10
 
 ---
 
@@ -153,7 +153,68 @@ SMTR (montagem de rede secundária) e SMFL escolhem sua variante pela **bitola d
 > O engine pula cabos com `(E)` no faturamento (`resolve_cables_direct`), mas a detecção de
 > variante lê a bitola — resolvendo SMTR/SMFL mesmo quando a rede secundária é pré-existente.
 
+### 8.1 Cabo MT nu CAA `NX2ANA(4ANA)` → ROSE + SPARROW
+
+Cabo MT nu de alumínio/CAA descrito como `NX2ANA(4ANA)` (gatilho: `tipo == "MT"` e a
+descrição contém `2ANA`/`4ANA`/`2AN`/`4AN`) é desdobrado em duas linhas de BOM em
+`resolve_cables_direct`:
+
+| Código SAP | Material | Função | Quantidade |
+|------------|----------|--------|------------|
+| `10050897` | CABO NU ALUMINIO 4AWG 7F ROSE | **neutro** | `metragem` (sempre 1× o trecho) |
+| `10050898` | CABO NU CAA AL 2AWG SPARROW | **fase(s)** | `metragem × N` |
+
+- **`N` (nº de vias/fases)** vem do prefixo `NX` da descrição: `3X2ANA → 3` (trifásico),
+  `2X2ANA → 2` (bifásico), `1X2ANA` ou sem prefixo → `1` (monofásico). Parse:
+  `re.search(r"(\d+)\s*X\s*\d*\s*AN", desc_up)`, default `1`.
+- **Por que SPARROW é a fase e ROSE o neutro:** em AWG, número menor = condutor mais grosso;
+  2AWG (SPARROW) > 4AWG (ROSE), então o SPARROW carrega carga (fases) e o ROSE é o neutro.
+- **Regressão (OV 4001739539):** antes o multiplicador era fixo em `3`, faturando 3× o
+  SPARROW em derivações 1F/2F. `MT 1x2ANA(4ANA)` com 101.46 m saía 304.38 m; agora sai
+  101.46 m. Coberto por `tests/test_production_logic.py::test_mt_cable_sparrow_multiplier_follows_phase_count`.
+
+> **Atenção (escopo futuro):** o gatilho é amplo (qualquer MT com `2AN`/`4AN`). Bitolas
+> diferentes que usem nomenclatura parecida (ex.: `1/0`, `4/0` CAA) cairiam nesta regra e
+> mapeariam para ROSE/SPARROW — revisar caso surjam.
+
 ---
+
+## 8.2 Poste com transformador (fonte = Supabase)
+
+A montagem do poste-trafo segue o Supabase como **fonte única**:
+
+- Se o poste tem uma estrutura ET de trafo resolvível no banco (`ET1T`/`ET4A`/`ET1BR`,
+  resolvida por `_resolve_contextual_structure_code` para o código completo como
+  `ET1T- MONO 15KVA 1F`), o **transformador e todos os acessórios vêm dessa estrutura**
+  (códigos novos). O caminho legado é **pulado** (`trafo_from_db_structure`):
+  `resolve_transformers_direct` (busca textual do trafo), os `hardware_kits` do
+  `unified_db.json` (`TRAFO_MONO`/`TRAFO_TRI_45`, **códigos velhos**) e o suporte
+  hardcoded. Sem isso, novos e velhos coexistiam (10002581, 10004254, 10010733,
+  10011197, 10012874 duplicados).
+- **Película de identificação** (`ESTF_STICKER_MAP`): o dígito **9 usa a mesma película
+  do 6** (`30058699`) — basta virar a peça. Por isso `9 → 30058699`.
+- **Cordoalha de aterramento** (`30054511`): quantidade unitária (placeholder) das
+  estruturas vira **15 m por descida**.
+- **Cinta/suporte por diâmetro**: resolvido pela coluna **Aplicação** (ver §8.3).
+
+## 8.3 Fonte única: Excel "Lista Consolidada" e coluna Aplicação
+
+A composição das estruturas vem do Excel
+`docs/Referencia_Tecnica/ESTRUTURAS PARA CALCULADORA MATERIAS.xlsx`, aba **"Lista
+Consolidada"** (`Estrutura | Código Hana | Descrição | Quantidade | Aplicação`).
+É a **fonte única** — não usar `unified_db.json`/`hardware_kits` para isso.
+
+- **Importação** (`scripts/utils_and_deploy/import_estruturas_aplicacao.py`): grava
+  `estrutura_materiais` com a coluna `aplicacao` (por material) e quantidade já
+  numérica (`core.aplicacao.parse_qty_text` converte `"4,5MTS"`→4.5,
+  `"2,4KG (15MTS)"`→15). `estruturas` tem 1 linha por código (`tipo_poste='ALL'`).
+- **Seleção por poste** (`explode_structure` + `core.aplicacao.aplicacao_matches`):
+  cada material só entra na BOM se sua Aplicação casar com o tipo de poste:
+  `ALL` (sempre), `12X600 CIRCULAR` (porte+subtipo), `TODOS EXETO 11X300DT…`
+  (todos menos os listados), `NO CABO …` (variante por cabo, não filtra por poste).
+  `pole_signature("C12/600") = (12, 600, CIRCULAR)`; subtipo DT vem de `DT/RT` no tipo.
+- Toda quantidade/composição/diâmetro nasce aqui. Para corrigir BOM, editar o Excel
+  e rodar o importador — não tocar no engine.
 
 ## 9. Saída e ordenação
 

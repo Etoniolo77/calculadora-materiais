@@ -141,11 +141,100 @@ def _verify_supabase_jwt(token: str | None) -> str | None:
     return None
 
 
+def _get_supabase_auth_settings() -> tuple[str, str]:
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "").strip()
+    if not supabase_url or not supabase_anon_key:
+        raise HTTPException(
+            status_code=500,
+            detail="SUPABASE_URL ou SUPABASE_ANON_KEY nao configurados.",
+        )
+    return supabase_url, supabase_anon_key
+
+
+def _set_session_cookie(
+    response: Response, token: str, request: Request | None = None
+) -> Response:
+    response.set_cookie(
+        AUTH_SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(request and request.url.scheme == "https"),
+        path="/",
+        max_age=86400 * 7,
+    )
+    return response
+
+
+def _extract_auth_token(body: dict[str, Any]) -> str:
+    session = body.get("session") or {}
+    return str(body.get("access_token") or session.get("access_token") or "").strip()
+
+
+def _extract_auth_email(body: dict[str, Any], fallback_email: str) -> str:
+    session = body.get("session") or {}
+    session_user = session.get("user") if isinstance(session, dict) else {}
+    user = body.get("user") or session_user or {}
+    return str(user.get("email") or fallback_email).strip().lower()
+
+
+def _supabase_auth_post(
+    endpoint: str,
+    payload: dict[str, str],
+    request: Request | None = None,
+) -> tuple[dict[str, Any], str]:
+    supabase_url, supabase_anon_key = _get_supabase_auth_settings()
+    try:
+        import requests
+
+        url = f"{supabase_url.rstrip('/')}/auth/v1/{endpoint.lstrip('/')}"
+        headers = {"apikey": supabase_anon_key, "Content-Type": "application/json"}
+        resp = requests.post(url, headers=headers, json=payload, timeout=20)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Falha ao contatar Supabase Auth: {exc}"
+        ) from exc
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"message": resp.text}
+
+    if resp.status_code >= 400:
+        raw_detail = body.get("msg") or body.get("message") or body.get("error_description") or ""
+        error_code = body.get("error_code", "")
+        _SUPABASE_ERROR_MAP = {
+            "over_email_send_rate_limit": (
+                "Limite de cadastros atingido. O Supabase permite poucos e-mails de "
+                "confirmacao por hora no plano gratuito. Aguarde alguns minutos e tente novamente."
+            ),
+            "user_already_exists": "Este e-mail ja possui uma conta cadastrada. Utilize a aba Entrar para fazer login.",
+            "weak_password": "Senha muito fraca. Use ao menos 6 caracteres combinando letras e numeros.",
+            "email_not_confirmed": "E-mail ainda nao confirmado. Verifique sua caixa de entrada e clique no link de ativacao.",
+            "invalid_credentials": "E-mail ou senha invalidos.",
+        }
+        detail = _SUPABASE_ERROR_MAP.get(error_code) or raw_detail or "Falha ao autenticar no Supabase."
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=detail,
+        )
+
+    token = _extract_auth_token(body)
+    if token and request is not None:
+        # O token será validado pelo cookie/jwt do backend nas requisições futuras.
+        pass
+    return body, token
+
+
 class SupabaseAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         public_paths = (
             "/login",
+            "/auth/login",
+            "/auth/register",
+            "/auth/recover",
             "/auth/session",
             "/auth/logout",
             "/health",
@@ -788,16 +877,96 @@ def auth_session_set(request: Request, payload: dict[str, str]):
             status_code=401, detail="Sessao invalida ou expirada no Supabase."
         )
     resp = JSONResponse(content={"status": "ok", "email": email})
-    resp.set_cookie(
-        AUTH_SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=request.url.scheme == "https",
-        path="/",
-        max_age=86400 * 7,
+    return _set_session_cookie(resp, token, request)
+
+
+@app.post("/auth/login")
+def auth_login(request: Request, payload: dict[str, str]) -> JSONResponse:
+    email = str(payload.get("email", "") or "").strip().lower()
+    password = str(payload.get("password", "") or "")
+    if not email or not password:
+        raise HTTPException(
+            status_code=400, detail="Informe e-mail e senha para autenticar."
+        )
+    if not _is_allowed_email(email):
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso restrito ao dominio corporativo ou usuarios autorizados.",
+        )
+
+    body, token = _supabase_auth_post(
+        "token?grant_type=password", {"email": email, "password": password}, request
     )
-    return resp
+    session_email = _extract_auth_email(body, email)
+    if not token:
+        raise HTTPException(
+            status_code=502,
+            detail="Supabase nao retornou sessao valida apos login.",
+        )
+    if not _is_allowed_email(session_email):
+        raise HTTPException(
+            status_code=403,
+            detail="E-mail autenticado nao autorizado para este sistema.",
+        )
+
+    resp = JSONResponse(content={"status": "ok", "email": session_email})
+    return _set_session_cookie(resp, token, request)
+
+
+@app.post("/auth/register")
+def auth_register(request: Request, payload: dict[str, str]) -> JSONResponse:
+    email = str(payload.get("email", "") or "").strip().lower()
+    password = str(payload.get("password", "") or "")
+    if not email or not password:
+        raise HTTPException(
+            status_code=400, detail="Informe e-mail e senha para registrar."
+        )
+    if not _is_allowed_email(email):
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso restrito ao dominio corporativo ou usuarios autorizados.",
+        )
+
+    body, token = _supabase_auth_post(
+        "signup", {"email": email, "password": password}, request
+    )
+    session_email = _extract_auth_email(body, email)
+    if token and _is_allowed_email(session_email):
+        resp = JSONResponse(content={"status": "ok", "email": session_email})
+        return _set_session_cookie(resp, token, request)
+
+    return JSONResponse(
+        content={
+            "status": "pending_confirmation",
+            "email": session_email,
+            "detail": "Conta criada. Verifique seu e-mail corporativo para concluir a ativacao.",
+        }
+    )
+
+
+@app.post("/auth/recover")
+def auth_recover(payload: dict[str, str]) -> JSONResponse:
+    email = str(payload.get("email", "") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Informe o e-mail para recuperacao.")
+    if not _is_allowed_email(email):
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso restrito ao dominio corporativo ou usuarios autorizados.",
+        )
+    supabase_url, supabase_anon_key = _get_supabase_auth_settings()
+    try:
+        import requests as req
+        url = f"{supabase_url.rstrip('/')}/auth/v1/recover"
+        headers = {"apikey": supabase_anon_key, "Content-Type": "application/json"}
+        resp = req.post(url, headers=headers, json={"email": email}, timeout=20)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Falha ao contatar Supabase Auth: {exc}") from exc
+    # Supabase retorna 200 mesmo se o e-mail nao existir (protecao anti-enumeracao)
+    return JSONResponse(content={
+        "status": "ok",
+        "detail": "Se este e-mail estiver cadastrado, voce recebera um link de redefinicao de senha em breve.",
+    })
 
 
 @app.get("/auth/logout")

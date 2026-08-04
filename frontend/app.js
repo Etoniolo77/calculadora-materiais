@@ -98,11 +98,18 @@ function apiUrl(path) {
   return `${base}${cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`}`;
 }
 
-function apiFetch(path, options = {}) {
-  return fetch(apiUrl(path), {
-    credentials: "include",
-    ...options,
-  });
+async function apiFetch(path, options = {}) {
+  const opts = { credentials: "include", ...options };
+  let resp = await fetch(apiUrl(path), opts);
+  // Recuperacao automatica: se o cookie carrega um token expirado, renova a
+  // sessao no Supabase, re-sincroniza o cookie e refaz a requisicao uma vez.
+  if (resp.status === 401 && !String(path).includes("/auth/session")) {
+    const refreshed = await refreshAndSyncSession();
+    if (refreshed) {
+      resp = await fetch(apiUrl(path), opts);
+    }
+  }
+  return resp;
 }
 
 function navigateWithVersion(path) {
@@ -959,29 +966,65 @@ function getAuthClient() {
   if (!window.supabase || typeof window.supabase.createClient !== "function") {
     throw new Error("Biblioteca do Supabase não carregada.");
   }
-  authClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  authClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
+  });
+  // Sempre que o Supabase renova o token (timer de auto-refresh) ou faz login,
+  // re-sincroniza o cookie do backend para que ele nunca fique com JWT expirado.
+  authClient.auth.onAuthStateChange((event, session) => {
+    if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
+      syncSessionToBackend(session);
+    }
+  });
   return authClient;
+}
+
+async function syncSessionToBackend(session) {
+  if (!session?.access_token) {
+    return false;
+  }
+  try {
+    const resp = await fetch(apiUrl("/auth/session"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: session.access_token }),
+    });
+    return resp.ok;
+  } catch (_err) {
+    return false;
+  }
+}
+
+async function refreshAndSyncSession() {
+  try {
+    const client = getAuthClient();
+    let {
+      data: { session },
+    } = await client.auth.getSession();
+    // Renova proativamente se a sessao estiver ausente ou expirando (margem 60s).
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (!session || (session.expires_at && session.expires_at - nowSec < 60)) {
+      const { data, error } = await client.auth.refreshSession();
+      if (error) {
+        return false;
+      }
+      session = data?.session || null;
+    }
+    return await syncSessionToBackend(session);
+  } catch (_err) {
+    return false;
+  }
 }
 
 async function ensureAuthenticatedSession() {
   try {
-    const client = getAuthClient();
-    const {
-      data: { session },
-      error,
-    } = await client.auth.getSession();
-    if (error) {
-      throw error;
-    }
-    if (session?.access_token) {
-      const syncResp = await apiFetch("/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: session.access_token }),
-      });
-      if (syncResp.ok) {
-        return true;
-      }
+    if (await refreshAndSyncSession()) {
+      return true;
     }
   } catch (_err) {
     // segue para redirecionamento

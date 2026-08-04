@@ -131,6 +131,10 @@ ESTF_STICKER_MAP = {
     "6": "30058699",
     "7": "30058700",
     "8": "30058701",
+    # O dígito 9 usa a MESMA película do 6 (basta virar a peça de cabeça p/ baixo).
+    # Mapear 9→30058699 evita token órfão e, em códigos que tenham 6 e 9, soma
+    # corretamente 2 unidades da película "6".
+    "9": "30058699",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1654,10 +1658,15 @@ class MaterialEngine:
                     termos_busca.append(numeros[-1])
 
             if self.db_loader:
-                # Regra determinística para cabo MT 3X2ANA(4ANA):
-                #  - 1 via de 4AWG ROSE (mesma metragem do trecho)
-                #  - 3 vias de 2AWG SPARROW (3 x metragem do trecho)
+                # Regra determinística para cabo MT NX2ANA(4ANA):
+                #  - 1 via de 4AWG ROSE (neutro, sempre 1 x metragem do trecho)
+                #  - N vias de 2AWG SPARROW (fases), onde N vem do prefixo "NX"
+                #    da descrição: 3X2ANA -> 3 (trifásico); 1X2ANA / sem prefixo
+                #    -> 1 (monofásico). Antes era fixo em 3, faturando 3x o SPARROW
+                #    em derivações 1F/2F.
                 if tipo == "MT" and ("2ANA" in desc_up or "4ANA" in desc_up or "2AN" in desc_up or "4AN" in desc_up):
+                    m_vias = re.search(r"(\d+)\s*X\s*\d*\s*AN", desc_up)
+                    n_vias = int(m_vias.group(1)) if m_vias else 1
                     mats.append(
                         {
                             "Origem": f"Cabo {tipo}",
@@ -1674,7 +1683,7 @@ class MaterialEngine:
                             "Código SAP": "10050898",
                             "Descrição": self.db_loader.get_sap_description("10050898")
                             or "CABO NU CAA AL 2AWG SPARROW",
-                            "Quantidade": qtd * 3,
+                            "Quantidade": qtd * n_vias,
                             "Confiança": 0.98,
                         }
                     )
@@ -1961,27 +1970,47 @@ class MaterialEngine:
                 if "(E)" not in str(data["Trafo"]) and not trafo_existing_by_code:
                     t_val = str(data["Trafo"]).upper()
 
-                    # A. Incluir o Equipamento Transformador em si
-                    transf_mats = self.resolve_transformers_direct([t_val], voltage_class=project_voltage_class)
-                    if not trafo_new_by_code:
-                        transf_mats = [
-                            tm
-                            for tm in transf_mats
-                            if str(tm.get("Código SAP", "")).strip()
-                            not in {"10000173", "30053053"}
-                        ]
-                    for tm in transf_mats:
-                        tm["Origem"] = f"Trafo {p_id}"
-                        add_result(tm)
+                    # Migração p/ Supabase como fonte única (2026-06-10): se o poste
+                    # tem uma estrutura ET de trafo resolvível no banco
+                    # (ET1T/ET4A/ET1BR), o transformador e seus acessórios já vêm
+                    # dessa estrutura com os códigos NOVOS. Pula o caminho legado
+                    # (busca textual do trafo + hardware_kits do unified_db +
+                    # suporte hardcoded) para não duplicar com códigos VELHOS.
+                    trafo_from_db_structure = False
+                    for _e in ests:
+                        _raw = str(_e or "").upper().strip()
+                        _base = STRUCTURE_ALIASES.get(_raw, _raw)
+                        if _base in {"ET1BR", "ET1T", "ET4", "ET4A"}:
+                            _resolved, _ = self._resolve_structure_code(_raw, pole_type)
+                            if _resolved and self._structure_exists_in_db(
+                                _resolved, pole_type
+                            ):
+                                trafo_from_db_structure = True
+                                break
 
-                    # B. Incluir o Kit de Hardware (Acessórios)
+                    # A. Incluir o Equipamento Transformador em si (só no caminho
+                    # legado; com estrutura ET o trafo vem da explosão do banco)
+                    if not trafo_from_db_structure:
+                        transf_mats = self.resolve_transformers_direct([t_val], voltage_class=project_voltage_class)
+                        if not trafo_new_by_code:
+                            transf_mats = [
+                                tm
+                                for tm in transf_mats
+                                if str(tm.get("Código SAP", "")).strip()
+                                not in {"10000173", "30053053"}
+                            ]
+                        for tm in transf_mats:
+                            tm["Origem"] = f"Trafo {p_id}"
+                            add_result(tm)
+
+                    # B. Incluir o Kit de Hardware (Acessórios) — apenas no caminho legado
                     kit_key = None
                     if "MONO" in t_val:
                         kit_key = "TRAFO_MONO"
                     else:
                         kit_key = "TRAFO_TRI_45"
 
-                    if kit_key and self.db_loader and self.db_loader.unified_db:
+                    if kit_key and not trafo_from_db_structure and self.db_loader and self.db_loader.unified_db:
                         # Evita dupla contagem: ET4/ET4A já contempla ferragens e
                         # conexões que se sobrepõem ao kit padrão de trafo mono.
                         est_norm = {
@@ -2006,7 +2035,7 @@ class MaterialEngine:
                                 )
 
                         # Injetar Suporte de Trafo para Postes Circulares
-                        if "C" in str(pole_type).upper():
+                        if "C" in str(pole_type).upper() and not trafo_from_db_structure:
                             add_result(
                                 {
                                     "Origem": f"Suporte Trafo {p_id}",
@@ -2251,36 +2280,27 @@ class MaterialEngine:
                         }
                     )
 
-        # --- REGRA DE FIXAÇÃO: parafuso M16 por cinta ---
-        # Toda cinta de poste (CINTA POSTE AC ZC) é fixada por 1 parafuso M16.
-        # Soma as cintas válidas por poste e injeta o parafuso correspondente
-        # (FASTENER_BOLT). Ignora cintas em retirada e SAP indefinido.
-        cinta_qty_by_pole: dict[str, float] = {}
+        # NOTA (2026-06-10): a regra antiga "1 parafuso M16 (30058226) por cinta"
+        # foi REMOVIDA. As estruturas do Supabase já incluem seus próprios
+        # parafusos de fixação por composição (ex.: B1..B4 trazem 30058226 ×2),
+        # então a injeção genérica por cinta duplicava o material (aparecia em
+        # P2/P3 onde não pertence). Fonte de verdade = estrutura no banco.
+
+        # --- CORDOALHA DE ATERRAMENTO: metragem por descida (2026-06-10) ---
+        # A cordoalha de aterramento (30054511) vem das estruturas com quantidade
+        # unitária (placeholder). A regra de negócio é 15 m por descida; cada
+        # ocorrência placeholder (qtd <= 1) vira 15 m. Comprimentos já reais
+        # (ex.: CE-B3 = 2,4) não são alterados.
+        GROUND_CORD_CODE = "30054511"
+        GROUND_CORD_M_PER_DESCIDA = 15.0
         for row in results:
-            desc = str(row.get("Descrição", "")).upper()
-            sap = str(row.get("Código SAP", "")).upper()
-            is_cinta = "CINTA" in desc or "BRAÇADEIRA" in desc or "BRACADEIRA" in desc
-            if is_cinta and "RETIRAD" not in desc and not sap.startswith("VERIFICAR"):
-                pid = str(row.get("pole_id", "") or "")
+            if str(row.get("Código SAP", "")).strip() == GROUND_CORD_CODE:
                 try:
                     q = float(row.get("Quantidade", 0) or 0)
                 except (TypeError, ValueError):
                     q = 0.0
-                if q > 0:
-                    cinta_qty_by_pole[pid] = cinta_qty_by_pole.get(pid, 0.0) + q
-        if cinta_qty_by_pole:
-            bolt_desc = "PARAFUSO CAB QUAD 16MM 125MM AC"
-            if self.db_loader and FASTENER_BOLT in getattr(self.db_loader, "sap_codes", {}):
-                bolt_desc = self.db_loader.sap_codes[FASTENER_BOLT]
-            for pid, q in cinta_qty_by_pole.items():
-                results.append({
-                    "Origem": f"Fixacao cinta {pid}",
-                    "Código SAP": FASTENER_BOLT,
-                    "Descrição": bolt_desc,
-                    "Quantidade": q,
-                    "pole_id": pid,
-                    "Confiança": 0.95,
-                })
+                if 0 < q <= 1:
+                    row["Quantidade"] = GROUND_CORD_M_PER_DESCIDA * q
 
         # Ajuste fino orientado por validação especialista para perfil ET4-U3-S3.
         self.last_raw_results = [row.copy() for row in results]
