@@ -16,10 +16,6 @@ const state = {
 };
 
 const APP_MODE = document.body?.dataset?.appMode || "programacao";
-const SUPABASE_URL = "https://zhuwirlcnbxysbgdtses.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpodXdpcmxjbmJ4eXNiZ2R0c2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NTI1MjAsImV4cCI6MjA5NjAyODUyMH0.RJ0yS7aWZLAhRGhuN26hwZ0eg3SEw99DbUmAIlzOp30";
-let authClient = null;
 
 const POLE_TYPES = [
   "Desconhecido",
@@ -100,16 +96,7 @@ function apiUrl(path) {
 
 async function apiFetch(path, options = {}) {
   const opts = { credentials: "include", ...options };
-  let resp = await fetch(apiUrl(path), opts);
-  // Recuperacao automatica: se o cookie carrega um token expirado, renova a
-  // sessao no Supabase, re-sincroniza o cookie e refaz a requisicao uma vez.
-  if (resp.status === 401 && !String(path).includes("/auth/session")) {
-    const refreshed = await refreshAndSyncSession();
-    if (refreshed) {
-      resp = await fetch(apiUrl(path), opts);
-    }
-  }
-  return resp;
+  return await fetch(apiUrl(path), opts);
 }
 
 function navigateWithVersion(path) {
@@ -959,71 +946,12 @@ async function parseApiError(resp, fallbackMessage) {
   return message;
 }
 
-function getAuthClient() {
-  if (authClient) {
-    return authClient;
-  }
-  if (!window.supabase || typeof window.supabase.createClient !== "function") {
-    throw new Error("Biblioteca do Supabase não carregada.");
-  }
-  authClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: false,
-    },
-  });
-  // Sempre que o Supabase renova o token (timer de auto-refresh) ou faz login,
-  // re-sincroniza o cookie do backend para que ele nunca fique com JWT expirado.
-  authClient.auth.onAuthStateChange((event, session) => {
-    if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
-      syncSessionToBackend(session);
-    }
-  });
-  return authClient;
-}
-
-async function syncSessionToBackend(session) {
-  if (!session?.access_token) {
-    return false;
-  }
-  try {
-    const resp = await fetch(apiUrl("/auth/session"), {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: session.access_token }),
-    });
-    return resp.ok;
-  } catch (_err) {
-    return false;
-  }
-}
-
-async function refreshAndSyncSession() {
-  try {
-    const client = getAuthClient();
-    let {
-      data: { session },
-    } = await client.auth.getSession();
-    // Renova proativamente se a sessao estiver ausente ou expirando (margem 60s).
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (!session || (session.expires_at && session.expires_at - nowSec < 60)) {
-      const { data, error } = await client.auth.refreshSession();
-      if (error) {
-        return false;
-      }
-      session = data?.session || null;
-    }
-    return await syncSessionToBackend(session);
-  } catch (_err) {
-    return false;
-  }
-}
-
 async function ensureAuthenticatedSession() {
   try {
-    if (await refreshAndSyncSession()) {
+    const resp = await fetch(apiUrl("/auth/session"), {
+      credentials: "include",
+    });
+    if (resp.ok) {
       return true;
     }
   } catch (_err) {
@@ -1036,8 +964,9 @@ async function ensureAuthenticatedSession() {
 
 async function logoutAndRedirect() {
   try {
-    const client = getAuthClient();
-    await client.auth.signOut();
+    await fetch(apiUrl("/auth/logout"), {
+      credentials: "include",
+    });
   } catch (_err) {
     // Mesmo com falha no signOut, redireciona para login.
   }
