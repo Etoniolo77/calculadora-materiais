@@ -52,6 +52,10 @@
     {
       "source": "/login.html",
       "destination": "/frontend/login.html"
+    },
+    {
+      "source": "/reset-password",
+      "destination": "/frontend/reset-password.html"
     }
   ]
 }

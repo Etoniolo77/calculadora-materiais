@@ -246,6 +246,7 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
             "/auth/login",
             "/auth/register",
             "/auth/recover",
+            "/auth/reset-password",
             "/auth/session",
             "/auth/logout",
             "/health",
@@ -957,6 +958,33 @@ def auth_register(request: Request, payload: dict[str, str]) -> JSONResponse:
             "detail": "Conta criada. Verifique seu e-mail corporativo para concluir a ativacao.",
         }
     )
+
+
+@app.post("/auth/reset-password")
+def auth_reset_password(payload: dict[str, str]) -> JSONResponse:
+    token = str(payload.get("token", "") or "").strip()
+    new_password = str(payload.get("password", "") or "")
+    if not token or not new_password:
+        raise HTTPException(status_code=400, detail="Token e senha sao obrigatorios.")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Senha deve ter ao menos 6 caracteres.")
+    supabase_url, supabase_anon_key = _get_supabase_auth_settings()
+    try:
+        import requests as req
+        url = f"{supabase_url.rstrip('/')}/auth/v1/user"
+        headers = {
+            "apikey": supabase_anon_key,
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        resp = req.put(url, headers=headers, json={"password": new_password}, timeout=20)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Falha ao contatar Supabase: {exc}") from exc
+    if resp.status_code >= 400:
+        body = resp.json() if resp.content else {}
+        detail = body.get("msg") or body.get("message") or "Falha ao redefinir senha."
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return JSONResponse(content={"status": "ok", "detail": "Senha redefinida com sucesso."})
 
 
 @app.post("/auth/recover")
