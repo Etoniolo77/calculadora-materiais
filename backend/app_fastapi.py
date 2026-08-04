@@ -152,6 +152,17 @@ def _get_supabase_auth_settings() -> tuple[str, str]:
     return supabase_url, supabase_anon_key
 
 
+def _is_secure_request(request: Request | None) -> bool:
+    if not request:
+        return False
+    # Vercel faz SSL termination na edge e encaminha via HTTP interno.
+    # x-forwarded-proto é a forma correta de detectar HTTPS no Vercel.
+    proto = request.headers.get("x-forwarded-proto", "")
+    if proto:
+        return proto.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
 def _set_session_cookie(
     response: Response, token: str, request: Request | None = None
 ) -> Response:
@@ -160,7 +171,7 @@ def _set_session_cookie(
         token,
         httponly=True,
         samesite="lax",
-        secure=bool(request and request.url.scheme == "https"),
+        secure=_is_secure_request(request),
         path="/",
         max_age=86400 * 7,
     )
@@ -860,11 +871,15 @@ def get_config() -> dict[str, str]:
 @app.get("/auth/session")
 def auth_session_get(request: Request) -> dict[str, str]:
     token = request.cookies.get(AUTH_SESSION_COOKIE)
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    print(f"[auth/session] proto={proto} token_present={bool(token)} token_len={len(token or '')}")
     email = _verify_supabase_jwt(token)
     if not email:
+        print(f"[auth/session] FALHOU verificacao — retornando 401")
         raise HTTPException(
             status_code=401, detail="Sessao invalida ou expirada no Supabase."
         )
+    print(f"[auth/session] OK para {email}")
     return {"status": "ok", "email": email}
 
 
