@@ -238,8 +238,6 @@
     }
   </style>
 
-  <!-- Supabase JS Client Library -->
-  <script src="/frontend/supabase.min.js"></script>
 </head>
 
 <body>
@@ -280,6 +278,12 @@
         </button>
       </form>
 
+      <div id="recoverLink" style="text-align:center; margin-top: 10px;">
+        <a href="#" id="btnRecover" onclick="handleRecover(event)" style="font-size:0.82rem; color:#6c757d; text-decoration:underline;">
+          Esqueci minha senha
+        </a>
+      </div>
+
       <div class="footer-info">
         Calculadora de Materiais v1.0.38 | Eletromarquez
       </div>
@@ -288,11 +292,8 @@
 
   <script>
     let activeTab = 'login';
-    let supabaseClient = null;
     const ALLOWED_DOMAIN = 'eletromarquez.com.br';
     const ALLOWED_EMAILS = new Set(['admin@admin.com.br', 'admin@admin.com']);
-    const SUPABASE_URL = 'https://zhuwirlcnbxysbgdtses.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpodXdpcmxjbmJ4eXNiZ2R0c2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NTI1MjAsImV4cCI6MjA5NjAyODUyMH0.RJ0yS7aWZLAhRGhuN26hwZ0eg3SEw99DbUmAIlzOp30';
 
     const statusBox = document.getElementById("statusBox");
     const formSubtitle = document.getElementById("formSubtitle");
@@ -303,42 +304,13 @@
     const btnText = document.getElementById("btnText");
     const authForm = document.getElementById("authForm");
 
-    // Inicializar cliente Supabase no frontend (deploy estático)
-    async function initSupabase() {
-      try {
-        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-          showStatus("Configuração do Supabase ausente no frontend.", false);
-          btnSubmit.disabled = true;
-          return;
-        }
-
-        if (!window.supabase || typeof window.supabase.createClient !== 'function') {
-          throw new Error('Biblioteca do Supabase não carregada.');
-        }
-
-        // Usa o objeto global 'supabase' da biblioteca para instanciar o cliente.
-        // persistSession garante que o refresh_token fique salvo para o app.js
-        // renovar a sessao depois que o access_token (1h) expirar.
-        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: false,
-          },
-        });
-
-        await supabaseClient.auth.getSession();
-      } catch (err) {
-        showStatus("Erro de inicialização: " + err.message, false);
-        btnSubmit.disabled = true;
-      }
-    }
-
     function showStatus(msg, ok = true) {
       statusBox.textContent = msg;
       statusBox.className = ok ? "status-msg ok" : "status-msg err";
       statusBox.style.display = 'block';
     }
+
+    const recoverLink = document.getElementById("recoverLink");
 
     function switchTab(tab) {
       activeTab = tab;
@@ -348,11 +320,41 @@
         tabRegister.classList.remove('active');
         formSubtitle.textContent = "Acesse com sua conta corporativa";
         btnText.textContent = "Acessar Sistema";
+        recoverLink.style.display = 'block';
       } else {
         tabLogin.classList.remove('active');
         tabRegister.classList.add('active');
         formSubtitle.textContent = "Registre sua conta com o e-mail corporativo";
         btnText.textContent = "Cadastrar Conta";
+        recoverLink.style.display = 'none';
+      }
+    }
+
+    async function handleRecover(event) {
+      event.preventDefault();
+      const email = document.getElementById("email").value.trim().toLowerCase();
+      if (!email) {
+        showStatus("Preencha o e-mail antes de solicitar a recuperação de senha.", false);
+        return;
+      }
+      if (!validateDomain(email)) {
+        showStatus(`Acesso restrito. Utilize seu e-mail corporativo @${ALLOWED_DOMAIN}.`, false);
+        return;
+      }
+      btnSubmit.disabled = true;
+      statusBox.style.display = 'none';
+      try {
+        const resp = await fetch('/auth/recover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        showStatus(data?.detail || "Link de recuperação enviado. Verifique seu e-mail.", true);
+      } catch (err) {
+        showStatus("Falha ao solicitar recuperação. Verifique sua conexão.", false);
+      } finally {
+        btnSubmit.disabled = false;
       }
     }
 
@@ -366,11 +368,6 @@
 
     async function handleSubmit(event) {
       event.preventDefault();
-      if (!supabaseClient) {
-        showStatus("Supabase não foi inicializado corretamente.", false);
-        return;
-      }
-
       const email = document.getElementById("email").value.trim().toLowerCase();
       const password = document.getElementById("password").value;
 
@@ -387,22 +384,11 @@
 
       try {
         if (activeTab === 'login') {
-          // Realizar login no Supabase
-          const {
-            data: loginData,
-            error,
-          } = await supabaseClient.auth.signInWithPassword({ email, password });
-          if (error) throw error;
-
-          const accessToken = loginData?.session?.access_token;
-          if (!accessToken) {
-            throw new Error("Sessão Supabase inválida após login.");
-          }
-
-          const syncResp = await fetch('/auth/session', {
+          const syncResp = await fetch('/auth/login', {
             method: 'POST',
+            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: accessToken }),
+            body: JSON.stringify({ email, password }),
           });
 
           if (!syncResp.ok) {
@@ -424,22 +410,46 @@
           }, 800);
 
         } else {
-          // Criar conta no Supabase
-          const { data, error } = await supabaseClient.auth.signUp({ email, password });
-          if (error) throw error;
+          const syncResp = await fetch('/auth/register', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+
+          if (!syncResp.ok) {
+            let detail = `Falha ao cadastrar conta (${syncResp.status}).`;
+            try {
+              const data = await syncResp.json();
+              detail = data?.detail || data?.message || detail;
+            } catch (_e) {
+              const text = await syncResp.text();
+              if (text) detail = text;
+            }
+            throw new Error(detail);
+          }
 
           showStatus("Conta criada! Verifique seu e-mail corporativo para confirmar a ativação.", true);
           authForm.reset();
+          btnSubmit.disabled = false;
+          btnLoader.style.display = 'none';
         }
       } catch (err) {
-        showStatus(err.message, false);
+        const message = String(err?.message || err || "").trim();
+        if (/failed to fetch|networkerror|name_not_resolved/i.test(message)) {
+          showStatus(
+            "Falha ao contatar o Supabase. Verifique a conexão ou a disponibilidade do serviço antes de tentar novamente.",
+            false
+          );
+        } else {
+          showStatus(message || "Falha ao autenticar.", false);
+        }
         btnSubmit.disabled = false;
         btnLoader.style.display = 'none';
       }
     }
 
     // Inicialização da página
-    initSupabase();
   </script>
 </body>
 
